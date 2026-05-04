@@ -95,7 +95,13 @@ export class CourtAvailabilityService {
 
   /**
    * Generate recurring slots for a venue (e.g. every 90 min, 8:00–22:00 daily).
+   *
+   * Hard-caps the number of generated rows so a misconfigured request
+   * (e.g. from_date 2024-01-01, to_date 2030-01-01, slot_duration 1) can
+   * never blow up memory or hammer the DB.
    */
+  private static readonly MAX_SLOTS_PER_GENERATION = 5000;
+
   static async generateRecurring(params: {
     venue_id: number;
     court_id?: number | null;
@@ -107,8 +113,17 @@ export class CourtAvailabilityService {
     price_cents?: number;
     booking_url?: string;
   }): Promise<number> {
+    if (!Number.isFinite(params.slot_duration_minutes) || params.slot_duration_minutes <= 0) {
+      throw new Error('slot_duration_minutes must be a positive number');
+    }
     const fromDate = new Date(params.from_date);
     const toDate = new Date(params.to_date);
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      throw new Error('Invalid from_date / to_date');
+    }
+    if (toDate < fromDate) {
+      throw new Error('to_date must be on or after from_date');
+    }
     const now = new Date();
     const slots: any[] = [];
 
@@ -126,6 +141,11 @@ export class CourtAvailabilityService {
         slotStart.getTime() + params.slot_duration_minutes * 60000 <= dayEnd.getTime();
         slotStart = new Date(slotStart.getTime() + params.slot_duration_minutes * 60000)
       ) {
+        if (slots.length >= this.MAX_SLOTS_PER_GENERATION) {
+          throw new Error(
+            `Too many slots requested (max ${this.MAX_SLOTS_PER_GENERATION}); narrow the date range or use a longer slot duration.`
+          );
+        }
         const slotEnd = new Date(slotStart.getTime() + params.slot_duration_minutes * 60000);
         slots.push({
           venue_id: params.venue_id,

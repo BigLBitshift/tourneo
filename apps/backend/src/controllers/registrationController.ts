@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { RegistrationService } from '../services/registrationService';
 import { BracketService } from '../services/bracketService';
+import { db, t } from '../config/database';
 
 export class RegistrationController {
   static async register(req: Request, res: Response, next: NextFunction) {
@@ -61,11 +62,20 @@ export class RegistrationController {
 
   static async getById(req: Request, res: Response, next: NextFunction) {
     try {
-      const { db, t } = require('../config/database');
       const registrationId = parseInt(req.params.id, 10);
-      const registration = await db(t('registrations'))
-        .where('id', registrationId)
-        .first();
+      const userId = req.user!.userId;
+      const isAdmin = req.user!.role === 'admin' || req.user!.role === 'superadmin';
+
+      // Ownership: a registration can be read by the registrant, the partner
+      // of a duo registration, or any admin. Anyone else gets a 404 (not 403)
+      // so we don't leak existence of registrations belonging to other users.
+      let query = db(t('registrations')).where('id', registrationId);
+      if (!isAdmin) {
+        query = query.andWhere(function () {
+          this.where('user_id', userId).orWhere('partner_user_id', userId);
+        });
+      }
+      const registration = await query.first();
 
       if (!registration) {
         return res.status(404).json({

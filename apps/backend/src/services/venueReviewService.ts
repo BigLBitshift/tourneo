@@ -55,6 +55,13 @@ export class VenueReviewService {
 
   /**
    * Create or update the current user's review for a venue.
+   *
+   * Two browser tabs submitting the first review for the same venue used
+   * to race: both `SELECT` returned no row, both `INSERT` ran, and the
+   * UNIQUE(venue_id, user_id) constraint blew up the second one with a
+   * duplicate-key error. We now do the read + write inside a single
+   * transaction with a row lock on the existing review (if any) so the
+   * second writer falls into the UPDATE branch instead.
    */
   static async upsertReview(
     venueId: number,
@@ -62,34 +69,53 @@ export class VenueReviewService {
     rating: number,
     comment?: string
   ): Promise<VenueReviewRow> {
-    if (rating < 1 || rating > 5) {
-      throw AppError.badRequest('Rating must be between 1 and 5');
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw AppError.badRequest('Rating must be an integer between 1 and 5');
     }
     const venue = await db(t('venues')).where('id', venueId).first();
     if (!venue) throw AppError.notFound('Venue');
 
     const now = new Date();
-    const existing = await db(t('venue_reviews'))
-      .where({ venue_id: venueId, user_id: userId })
-      .first();
+    const id = await db.transaction(async (trx) => {
+      const existing = await trx(t('venue_reviews'))
+        .where({ venue_id: venueId, user_id: userId })
+        .forUpdate()
+        .first();
 
-    let id: number;
-    if (existing) {
-      await db(t('venue_reviews'))
-        .where('id', existing.id)
-        .update({ rating, comment: comment ?? null, updated_at: now });
-      id = existing.id;
-    } else {
-      const inserted = await db(t('venue_reviews')).insert({
-        venue_id: venueId,
-        user_id: userId,
-        rating,
-        comment: comment ?? null,
-        created_at: now,
-        updated_at: now,
-      });
-      id = inserted[0];
-    }
+      if (existing) {
+        await trx(t('venue_reviews'))
+          .where('id', existing.id)
+          .update({ rating, comment: comment ?? null, updated_at: now });
+        return existing.id as number;
+      }
+
+      try {
+        const inserted = await trx(t('venue_reviews')).insert({
+          venue_id: venueId,
+          user_id: userId,
+          rating,
+          comment: comment ?? null,
+          created_at: now,
+          updated_at: now,
+        });
+        return inserted[0] as number;
+      } catch (err: any) {
+        // A concurrent first-write that won the race left a row behind
+        // between our SELECT and INSERT — recover by updating it.
+        if (err?.code === 'ER_DUP_ENTRY' || err?.errno === 1062) {
+          const winner = await trx(t('venue_reviews'))
+            .where({ venue_id: venueId, user_id: userId })
+            .first();
+          if (winner) {
+            await trx(t('venue_reviews'))
+              .where('id', winner.id)
+              .update({ rating, comment: comment ?? null, updated_at: now });
+            return winner.id as number;
+          }
+        }
+        throw err;
+      }
+    });
 
     const row = await db(t('venue_reviews')).where('id', id).first();
     return row as VenueReviewRow;
