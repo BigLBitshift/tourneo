@@ -1167,8 +1167,27 @@ router.post('/refunds', validateBody(createRefundSchema), async (req: Request, r
   try {
     const { payment_id, registration_id, amount_cents, reason, reason_detail } = req.body;
 
+    // Validate the payment is refundable. Without these checks an admin
+    // could refund against a pending/failed payment, or refund more than
+    // was actually charged. We sum already-issued refunds so the new
+    // amount + previous refunds never exceeds net_amount_cents.
     const payment = await db(t('payments')).where('id', payment_id).first();
     if (!payment) throw AppError.notFound('Payment');
+    if (payment.status !== 'succeeded' && payment.status !== 'partially_refunded') {
+      throw AppError.badRequest('Only succeeded payments can be refunded');
+    }
+
+    const [{ total: alreadyRefunded }] = await db(t('refunds'))
+      .where('payment_id', payment_id)
+      .whereIn('status', ['approved', 'processed'])
+      .sum('amount_cents as total');
+    const refundedSoFar = Number(alreadyRefunded || 0);
+    const remaining = (payment.net_amount_cents || 0) - refundedSoFar;
+    if (amount_cents > remaining) {
+      throw AppError.badRequest(
+        `Refund amount exceeds remaining payment balance (max ${remaining} cents)`
+      );
+    }
 
     const now = new Date();
     const [refundId] = await db(t('refunds')).insert({
