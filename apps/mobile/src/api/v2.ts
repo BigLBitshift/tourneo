@@ -563,3 +563,108 @@ export async function getMatchCard(matchId: number): Promise<MatchCard> {
   const res = await apiClient.get(`/matches/${matchId}/card`);
   return res.data.data;
 }
+
+// ─── Spiel jetzt / Herausforderungen ─────────────────────
+export type MatchRequestInvite = {
+  user_id: number;
+  status: 'invited' | 'accepted' | 'declined';
+  name: string;
+  avatar_url: string | null;
+};
+export type MatchRequest = {
+  id: number;
+  uuid: string;
+  requester_id: number;
+  request_type: 'open' | 'direct';
+  sport: 'padel' | 'fifa';
+  city: string | null;
+  players_needed: number;
+  slot_id: number | null;
+  booking_id: number | null;
+  status: 'searching' | 'matched' | 'booked' | 'cancelled' | 'expired';
+  expires_at: string;
+  invites: MatchRequestInvite[];
+};
+
+export async function createPlayNow(opts: {
+  sport?: 'padel' | 'fifa';
+  city?: string;
+  slot_id?: number;
+}): Promise<MatchRequest> {
+  const res = await apiClient.post('/play-now', opts);
+  return res.data.data;
+}
+export async function createChallenge(
+  opponentUserId: number,
+  opts: { sport?: 'padel' | 'fifa'; slot_id?: number } = {}
+): Promise<MatchRequest> {
+  const res = await apiClient.post('/challenges', { opponent_user_id: opponentUserId, ...opts });
+  return res.data.data;
+}
+export async function listPlayNow(): Promise<MatchRequest[]> {
+  const res = await apiClient.get('/play-now');
+  return res.data.data;
+}
+export async function respondPlayNow(id: number, accept: boolean): Promise<MatchRequest> {
+  const res = await apiClient.post(`/play-now/${id}/${accept ? 'accept' : 'decline'}`, {});
+  return res.data.data;
+}
+export async function cancelPlayNow(id: number): Promise<{ id: number; status: 'cancelled' }> {
+  const res = await apiClient.delete(`/play-now/${id}`);
+  return res.data.data;
+}
+
+// ─── Engagement: Challenges, Feed, Streak, Seasons ───────
+export type WeeklyChallenge = {
+  id: string;
+  week: string;
+  title: string;
+  target: number;
+  progress: number;
+  completed: boolean;
+};
+export async function getWeeklyChallenges(): Promise<WeeklyChallenge[]> {
+  const res = await apiClient.get('/me/challenges');
+  return res.data.data;
+}
+
+export type FeedItem = {
+  type: 'friend_match' | 'friend_achievement' | 'city_event';
+  ts: string;
+  payload: Record<string, unknown>;
+};
+export async function getActivityFeed(): Promise<FeedItem[]> {
+  const res = await apiClient.get('/me/feed');
+  return res.data.data;
+}
+
+export async function getMyStreak(): Promise<{
+  week_streak: number;
+  longest_week_streak: number;
+  last_played_week: string | null;
+}> {
+  const res = await apiClient.get('/me/streak');
+  return res.data.data;
+}
+
+export async function getCurrentSeason(): Promise<{
+  id: number;
+  code: string;
+  starts_at: string;
+  ends_at: string;
+} | null> {
+  const res = await apiClient.get('/seasons/current');
+  return res.data.data;
+}
+export async function getMySeasonHistory(): Promise<
+  Array<{ code: string; sport: 'padel' | 'fifa'; final_elo: number; final_rank: number }>
+> {
+  const res = await apiClient.get('/me/seasons');
+  return res.data.data;
+}
+
+// ─── Private Events ──────────────────────────────────────
+export async function getEventByInvite(token: string) {
+  const res = await apiClient.get(`/events/by-invite/${encodeURIComponent(token)}`);
+  return res.data.data;
+}

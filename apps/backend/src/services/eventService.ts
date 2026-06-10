@@ -48,6 +48,7 @@ export class EventService {
         sponsor_name: input.sponsor_name || null,
         sponsor_logo_url: input.sponsor_logo_url || null,
         sponsor_website_url: input.sponsor_website_url || null,
+        invite_token: input.access_type === 'private' ? uuidv4() : null,
         status: 'draft',
         created_by: createdBy,
         created_at: now,
@@ -309,12 +310,21 @@ export class EventService {
 
   static canUserRegister(
     event: any,
-    membershipTier: MembershipTier
+    membershipTier: MembershipTier,
+    inviteToken?: string
   ): { canRegister: boolean; reason?: string; opensAt?: Date } {
     const now = new Date();
 
     if (event.status === 'cancelled' || event.status === 'completed') {
       return { canRegister: false, reason: 'Event is no longer accepting registrations' };
+    }
+
+    // Private events are invite-only: the registration must carry the
+    // event's invite token (shared as a link by the organiser).
+    if (event.access_type === 'private') {
+      if (!inviteToken || !event.invite_token || inviteToken !== event.invite_token) {
+        return { canRegister: false, reason: 'This is a private event — an invite link is required' };
+      }
     }
 
     if (new Date(event.registration_closes_at) < now) {

@@ -92,6 +92,11 @@ app.use(
 // API Routes
 app.use(`/api/${env.apiVersion}`, apiRouter);
 
+// Public share-link landing pages (tourneo.de/match/:id etc.) — must be
+// registered before the 404 handler; lazy import keeps boot order simple.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+app.use('/', require('./routes/landing').landingRouter);
+
 // Root route
 app.get('/', (_req, res) => {
   res.json({

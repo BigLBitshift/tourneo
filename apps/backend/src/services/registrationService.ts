@@ -29,7 +29,7 @@ export class RegistrationService {
         .first();
       const membershipTier: MembershipTier = membership?.tier || 'free';
 
-      const accessCheck = EventService.canUserRegister(event, membershipTier);
+      const accessCheck = EventService.canUserRegister(event, membershipTier, input.invite_token);
       if (!accessCheck.canRegister) {
         throw AppError.badRequest(accessCheck.reason || 'Cannot register for this event');
       }

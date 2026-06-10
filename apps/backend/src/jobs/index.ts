@@ -5,6 +5,9 @@ import { sendBookingReminders } from './bookingReminder';
 import { pushCityRankChanges } from './cityRankPush';
 import { RegistrationService } from '../services/registrationService';
 import { CourtBookingService } from '../services/courtBookingService';
+import { PlayNowService } from '../services/playNowService';
+import { SeasonService } from '../services/seasonService';
+import { StreakService } from '../services/streakService';
 import { childLogger } from '../utils/logger';
 
 const log = childLogger('jobs');
@@ -56,6 +59,25 @@ const SCHEDULED_JOBS: ScheduledJob[] = [
     // (15-minute TTL on pending_payment bookings).
     everyMs: 5 * 60 * 1000,
     run: () => CourtBookingService.expireUnpaidBookings(),
+  },
+  {
+    name: 'play-now-expiry',
+    // Flips stale "Spiel jetzt" requests to expired after their 3h TTL.
+    everyMs: 15 * 60 * 1000,
+    run: () => PlayNowService.expireStale(),
+  },
+  {
+    name: 'season-rollover',
+    // Idempotent daily check: snapshots + soft-resets when a quarter ends,
+    // ensures an active season row always exists.
+    everyMs: 24 * 60 * 60 * 1000,
+    run: () => SeasonService.rollover(),
+  },
+  {
+    name: 'streak-warnings',
+    // Fri-Sun nudge for players whose weekly streak would break.
+    everyMs: 24 * 60 * 60 * 1000,
+    run: () => StreakService.warnAtRisk(),
   },
   {
     name: 'city-rank-push',

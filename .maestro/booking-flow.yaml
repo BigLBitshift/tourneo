@@ -1,0 +1,25 @@
+# Maestro E2E: court booking happy path
+# Run: maestro test .maestro/booking-flow.yaml
+# Requires: seeded venue with available slots, logged-out app state,
+# test account from SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD env.
+appId: com.tourneo.app
+---
+- launchApp
+- tapOn: "Anmelden"
+- inputText: ${TEST_EMAIL}
+- tapOn: "Passwort"
+- inputText: ${TEST_PASSWORD}
+- tapOn: "Einloggen"
+- assertVisible: "Home"
+- tapOn: "Spielen"
+- tapOn: "Plätze finden"
+- tapOn:
+    index: 0
+    text: "Verfügbarkeit"
+- assertVisible: "Platz-Verfügbarkeit"
+- tapOn:
+    index: 0
+    text: "Buchen"
+- assertVisible: "Platz buchen"
+- tapOn: "Jetzt buchen"
+- assertVisible: "Platz gebucht"

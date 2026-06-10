@@ -237,11 +237,24 @@ export class CourtBookingService {
         .first();
 
       if (slot && !isAdmin) {
+        // Membership perk: Plus/Club members can cancel until 30 minutes
+        // before start; free tier keeps the 2-hour cutoff.
+        const membership = await trx(t('memberships'))
+          .where('user_id', booking.user_id)
+          .where('status', 'active')
+          .first();
+        const isPaidTier = membership?.tier === 'plus' || membership?.tier === 'club';
+        const cutoffMs = isPaidTier
+          ? 30 * 60 * 1000
+          : CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000;
+
         const slotStart = combineDateTime(slot.slot_date, slot.slot_start);
-        const cutoff = new Date(slotStart.getTime() - CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000);
+        const cutoff = new Date(slotStart.getTime() - cutoffMs);
         if (now > cutoff) {
           throw AppError.badRequest(
-            `Bookings can only be cancelled up to ${CANCELLATION_CUTOFF_HOURS} hours before the start time`
+            isPaidTier
+              ? 'Bookings can only be cancelled up to 30 minutes before the start time'
+              : `Bookings can only be cancelled up to ${CANCELLATION_CUTOFF_HOURS} hours before the start time. Plus/Club members can cancel until 30 minutes before.`
           );
         }
       }

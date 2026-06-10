@@ -6,8 +6,12 @@ import { env } from '../config/environment';
 export class PaymentController {
   static async createIntent(req: Request, res: Response, next: NextFunction) {
     try {
-      const { registration_id } = req.body;
-      const result = await PaymentService.createPaymentIntent(registration_id, req.user!.userId);
+      const { registration_id, promo_code } = req.body;
+      const result = await PaymentService.createPaymentIntent(
+        registration_id,
+        req.user!.userId,
+        typeof promo_code === 'string' && promo_code.trim() ? promo_code.trim() : undefined
+      );
       res.status(201).json({ success: true, data: result });
     } catch (error) {
       next(error);

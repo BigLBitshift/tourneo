@@ -9,7 +9,7 @@ const stripe = env.stripe.secretKey
   : null;
 
 export class PaymentService {
-  static async createPaymentIntent(registrationId: number, userId: number) {
+  static async createPaymentIntent(registrationId: number, userId: number, promoCode?: string) {
     if (!stripe) throw AppError.internal('Payment system not configured');
 
     const registration = await db(t('registrations'))
@@ -25,8 +25,15 @@ export class PaymentService {
     const event = await db(t('events')).where('id', registration.event_id).first();
     if (!event) throw AppError.notFound('Event');
 
-    // Calculate net amount
-    const netAmount = event.entry_fee_cents - registration.discount_applied_cents;
+    // Calculate net amount (membership discount first, then promo code)
+    let netAmount = event.entry_fee_cents - registration.discount_applied_cents;
+    let promoApplied: { promo_code_id: number; discount_cents: number } | null = null;
+    if (promoCode) {
+      const { PromoService } = await import('./promoService');
+      const promo = await PromoService.validate(promoCode, userId, netAmount);
+      netAmount = promo.final_amount_cents;
+      promoApplied = { promo_code_id: promo.promo_code_id, discount_cents: promo.discount_cents };
+    }
 
     if (netAmount <= 0) {
       // Free event or fully discounted — confirm directly
@@ -52,13 +59,13 @@ export class PaymentService {
     const paymentUuid = uuidv4();
     const now = new Date();
 
-    await db(t('payments')).insert({
+    const [paymentId] = await db(t('payments')).insert({
       uuid: paymentUuid,
       user_id: userId,
       registration_id: registrationId,
       payment_type: 'tournament_fee',
       amount_cents: event.entry_fee_cents,
-      discount_cents: registration.discount_applied_cents,
+      discount_cents: registration.discount_applied_cents + (promoApplied?.discount_cents ?? 0),
       net_amount_cents: netAmount,
       currency: event.currency,
       payment_method: 'card',
@@ -67,6 +74,13 @@ export class PaymentService {
       created_at: now,
       updated_at: now,
     });
+
+    // Burn the promo only after the discounted payment row exists, so
+    // abandoned validations never consume a redemption.
+    if (promoApplied) {
+      const { PromoService } = await import('./promoService');
+      await PromoService.redeem(promoApplied.promo_code_id, userId, paymentId);
+    }
 
     return {
       client_secret: paymentIntent.client_secret,

@@ -127,6 +127,35 @@ export class CourtAvailabilityService {
     const now = new Date();
     const slots: any[] = [];
 
+    // Dynamic pricing: per-venue rules (weekday bitmask + time window)
+    // override the flat price. First matching active rule wins; without a
+    // match the flat params.price_cents applies. Lets clubs make off-peak
+    // slots cheaper and prime time pricier.
+    const rules: Array<{
+      weekday_mask: number;
+      start_time: string;
+      end_time: string;
+      price_cents: number;
+    }> = await db(t('pricing_rules'))
+      .where('venue_id', params.venue_id)
+      .where('is_active', true)
+      .orderBy('id', 'asc')
+      .select('weekday_mask', 'start_time', 'end_time', 'price_cents');
+
+    const priceFor = (slotStart: Date): number | null => {
+      // Bitmask: Mon=1 … Sun=64 (getDay(): Sun=0 → bit 64)
+      const dow = slotStart.getDay();
+      const bit = dow === 0 ? 64 : 1 << (dow - 1);
+      const hhmm = `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}:00`;
+      for (const rule of rules) {
+        if ((rule.weekday_mask & bit) === 0) continue;
+        if (hhmm >= String(rule.start_time) && hhmm < String(rule.end_time)) {
+          return rule.price_cents;
+        }
+      }
+      return params.price_cents ?? null;
+    };
+
     for (let d = new Date(fromDate); d <= toDate; d.setDate(d.getDate() + 1)) {
       const dateStr = d.toISOString().slice(0, 10);
       const [startH, startM] = params.daily_start.split(':').map(Number);
@@ -154,7 +183,7 @@ export class CourtAvailabilityService {
           slot_start: this.formatTime(slotStart),
           slot_end: this.formatTime(slotEnd),
           status: 'available',
-          price_cents: params.price_cents ?? null,
+          price_cents: priceFor(slotStart),
           booking_url: params.booking_url ?? null,
           created_at: now,
           updated_at: now,

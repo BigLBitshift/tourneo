@@ -1650,4 +1650,58 @@ router.get(
   }
 );
 
+// ============================================================
+// 12. PROMO CODES + ANALYTICS
+// ============================================================
+
+const createPromoSchema = z.object({
+  code: z.string().min(3).max(32).regex(/^[A-Za-z0-9_-]+$/),
+  percent_off: z.number().int().min(1).max(100).optional(),
+  amount_off_cents: z.number().int().min(1).optional(),
+  max_redemptions: z.number().int().min(1).optional(),
+  expires_at: z.string().datetime().optional(),
+});
+
+router.post('/promo-codes', validateBody(createPromoSchema), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { PromoService } = await import('../services/promoService');
+    const promo = await PromoService.createCode(req.body);
+    await AuditService.logFromRequest(req, 'promo.created', 'promo_code', promo.id, {
+      metadata: { code: promo.code },
+    });
+    res.status(201).json({ success: true, data: promo });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/promo-codes', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { PromoService } = await import('../services/promoService');
+    res.json({ success: true, data: await PromoService.list() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/promo-codes/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { PromoService } = await import('../services/promoService');
+    const result = await PromoService.deactivate(parseInt(req.params.id, 10));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// The numbers that matter: retention, fill rate, revenue per club.
+router.get('/analytics/overview', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { AnalyticsService } = await import('../services/analyticsService');
+    res.json({ success: true, data: await AnalyticsService.overview() });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export { router as adminRouter };

@@ -1,0 +1,16 @@
+# Maestro E2E: tournament registration up to the payment sheet
+appId: com.tourneo.app
+---
+- launchApp
+- tapOn: "Anmelden"
+- inputText: ${TEST_EMAIL}
+- tapOn: "Passwort"
+- inputText: ${TEST_PASSWORD}
+- tapOn: "Einloggen"
+- tapOn: "Turniere"
+- tapOn:
+    index: 0
+    text: "Padel"
+- assertVisible: "Anmelden"
+- tapOn: "Anmelden"
+- assertVisible: "Teilnahmebedingungen"

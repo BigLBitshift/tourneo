@@ -9,11 +9,13 @@ const router = Router();
 router.get('/', optionalAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const query = leaderboardQuerySchema.parse(req.query);
-    const board = await LeaderboardService.top({
-      sport: query.sport,
-      city: query.city,
-      limit: query.limit,
-    });
+    // 60s cache — ranks only move when matches finish.
+    const { withCache } = await import('../utils/cache');
+    const board = await withCache(
+      `leaderboard:${query.sport}:${query.city || '_global'}:${query.limit}`,
+      60,
+      () => LeaderboardService.top({ sport: query.sport, city: query.city, limit: query.limit })
+    );
 
     let myRank: number | null = null;
     if (req.user) {

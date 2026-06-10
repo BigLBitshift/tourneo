@@ -699,6 +699,24 @@ export class BracketService {
         }
       }
 
+      // Weekly play-streaks for everyone on court (winner + loser side)
+      try {
+        const loserRegId =
+          winnerId === match.participant_1_registration_id
+            ? match.participant_2_registration_id
+            : match.participant_1_registration_id;
+        const regs = await db(t('registrations'))
+          .whereIn('id', [winnerId, loserRegId].filter(Boolean))
+          .select('user_id', 'partner_user_id');
+        const allPlayers = regs.flatMap((r: any) =>
+          [r.user_id, r.partner_user_id].filter((id: unknown): id is number => typeof id === 'number')
+        );
+        const { StreakService } = await import('./streakService');
+        await StreakService.recordPlayed(allPlayers);
+      } catch (err) {
+        console.warn('[brackets] streak update failed:', err);
+      }
+
       // Achievement evaluation for the winning side
       const winnerReg = await db(t('registrations')).where('id', winnerId).first();
       const winnerUserIds = [winnerReg?.user_id, winnerReg?.partner_user_id].filter(Boolean) as number[];

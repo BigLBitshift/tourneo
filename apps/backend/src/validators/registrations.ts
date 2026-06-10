@@ -12,6 +12,8 @@ export const createRegistrationSchema = z.object({
     errorMap: () => ({ message: 'You must confirm you are at least 18 years old' }),
   }),
   consent_media: z.boolean().default(false),
+  // Required to register for access_type='private' events (shared via link)
+  invite_token: z.string().max(36).optional(),
 }).refine(
   (data) => {
     if (data.registration_type === 'duo' && !data.partner_user_id) {

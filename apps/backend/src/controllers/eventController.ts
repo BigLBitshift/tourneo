@@ -29,7 +29,11 @@ export class EventController {
   static async list(req: Request, res: Response, next: NextFunction) {
     try {
       const filters = eventFiltersSchema.parse(req.query);
-      const result = await EventService.listEvents(filters);
+      // 30s read-through cache keyed by the full filter set — the event
+      // list is the hottest endpoint and tolerates slightly stale counts.
+      const { withCache } = await import('../utils/cache');
+      const cacheKey = `events:${JSON.stringify(filters)}`;
+      const result = await withCache(cacheKey, 30, () => EventService.listEvents(filters));
       res.json({ success: true, ...result });
     } catch (error) {
       next(error);
