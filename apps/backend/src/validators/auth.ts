@@ -61,7 +61,10 @@ export const loginSchema = z.object({
 
 export const appleSignInSchema = z.object({
   identity_token: z.string().min(1, 'Apple identity token is required'),
-  authorization_code: z.string().min(1, 'Apple authorization code is required'),
+  // Optional: the mobile client only sends the identity token; the
+  // authorization code is only needed for server-to-server token exchange
+  // (refresh/revoke), which we don't do yet.
+  authorization_code: z.string().min(1).optional(),
   first_name: z.string().max(100).optional(),
   last_name: z.string().max(100).optional(),
   email: z.string().email().optional(),

@@ -1,12 +1,25 @@
 import { Knex } from 'knex';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 
-const PREFIX = 'tourneo_';
+const PREFIX = process.env.DB_TABLE_PREFIX || 'tourneo_';
 const t = (name: string) => `${PREFIX}${name}`;
 
 export async function seed(knex: Knex): Promise<void> {
   const now = new Date();
+
+  // Idempotency guard: the seed creates baseline data (legal documents,
+  // admin user, demo venues/events). Running it twice would violate the
+  // unique email constraint and duplicate venues, so we bail out if the
+  // baseline already exists.
+  const existingTerms = await knex(t('legal_document_versions'))
+    .where({ document_type: 'terms', locale: 'de', is_active: true })
+    .first();
+  if (existingTerms) {
+    console.log('ℹ️  Seed skipped — baseline data already present.');
+    return;
+  }
 
   // ==========================================
   // LEGAL DOCUMENTS
@@ -83,12 +96,25 @@ export async function seed(knex: Knex): Promise<void> {
   // ==========================================
   // SUPERADMIN USER
   // ==========================================
-  const passwordHash = await bcrypt.hash('TourneoAdmin2025!', 12);
+  // Never hardcode the admin password in the repo. Take it from the
+  // environment; otherwise generate a random one and print it exactly
+  // once so the operator can store it in a password manager.
+  const adminEmail = process.env.SEED_ADMIN_EMAIL || 'gross.lukas01@web.de';
+  let adminPassword = process.env.SEED_ADMIN_PASSWORD;
+  if (!adminPassword) {
+    adminPassword = crypto.randomBytes(12).toString('base64url');
+    console.log('');
+    console.log('🔑 Generated superadmin credentials (store these now, they are not saved anywhere):');
+    console.log(`   Email:    ${adminEmail}`);
+    console.log(`   Password: ${adminPassword}`);
+    console.log('');
+  }
+  const passwordHash = await bcrypt.hash(adminPassword, 12);
   const adminUuid = uuidv4();
 
   const [adminId] = await knex(t('users')).insert({
     uuid: adminUuid,
-    email: 'gross.lukas01@web.de',
+    email: adminEmail,
     password_hash: passwordHash,
     email_verified: true,
     role: 'superadmin',

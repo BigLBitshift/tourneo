@@ -1,11 +1,21 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services/authService';
+import { AppleAuthService } from '../services/appleAuthService';
 
 export class AuthController {
   static async register(req: Request, res: Response, next: NextFunction) {
     try {
       const result = await AuthService.register(req.body);
       res.status(201).json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async appleSignIn(req: Request, res: Response, next: NextFunction) {
+    try {
+      const result = await AppleAuthService.signIn(req.body);
+      res.json({ success: true, data: result });
     } catch (error) {
       next(error);
     }

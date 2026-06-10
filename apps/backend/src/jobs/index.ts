@@ -1,29 +1,139 @@
+import { Queue, Worker, type JobsOptions } from 'bullmq';
+import Redis from 'ioredis';
 import { sendMatchReminders } from './matchReminder';
+import { RegistrationService } from '../services/registrationService';
+import { childLogger } from '../utils/logger';
+
+const log = childLogger('jobs');
+
+const QUEUE_NAME = 'tourneo-scheduled';
+
+interface ScheduledJob {
+  name: string;
+  everyMs: number;
+  run: () => Promise<unknown>;
+}
+
+/**
+ * All recurring background work is declared here once and executed either
+ * via BullMQ (when REDIS_URL is set) or a plain in-process setInterval
+ * fallback for local development.
+ *
+ * BullMQ gives us what setInterval cannot:
+ *   - exactly-once execution across multiple server instances
+ *     (repeatable jobs are deduplicated by the queue)
+ *   - jobs survive a process restart
+ *   - retry with backoff on failure
+ */
+const SCHEDULED_JOBS: ScheduledJob[] = [
+  {
+    name: 'match-reminders',
+    everyMs: 5 * 60 * 1000,
+    run: () => sendMatchReminders(),
+  },
+  {
+    name: 'waitlist-expiry',
+    // Cancels promoted waitlist registrations whose 24h payment window
+    // lapsed and promotes the next person. Was previously implemented
+    // but never scheduled — expired promotions piled up forever.
+    everyMs: 15 * 60 * 1000,
+    run: () => RegistrationService.expireUnpaidPromotions(),
+  },
+];
 
 let started = false;
 const intervals: NodeJS.Timeout[] = [];
+let queue: Queue | null = null;
+let worker: Worker | null = null;
+let bullConnection: Redis | null = null;
 
-/**
- * Lightweight in-process job runner — no extra dependency, just setInterval.
- * Started once from src/index.ts after the server is listening.
- */
 export function startJobs(): void {
   if (started) return;
   started = true;
 
-  // Match reminders every 5 minutes
-  const matchTimer = setInterval(() => {
-    sendMatchReminders().catch((err) => {
-      console.error('[jobs] sendMatchReminders failed:', err);
+  if (process.env.REDIS_URL) {
+    startBullMq(process.env.REDIS_URL).catch((err) => {
+      log.error({ err }, 'BullMQ startup failed — falling back to in-process timers');
+      startIntervalFallback();
     });
-  }, 5 * 60 * 1000);
-  intervals.push(matchTimer);
-
-  console.log('[jobs] background jobs started (matchReminders every 5min)');
+  } else {
+    startIntervalFallback();
+  }
 }
 
-export function stopJobs(): void {
+async function startBullMq(redisUrl: string): Promise<void> {
+  // BullMQ requires its own blocking-capable connection settings —
+  // do not reuse the shared client from config/redis.ts.
+  bullConnection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+
+  queue = new Queue(QUEUE_NAME, { connection: bullConnection });
+
+  // Register/refresh the repeatable schedule for every declared job.
+  // upsertJobScheduler is idempotent: calling it on every boot from every
+  // instance converges to a single schedule per job name.
+  for (const job of SCHEDULED_JOBS) {
+    const opts: JobsOptions = {
+      removeOnComplete: { count: 20 },
+      removeOnFail: { count: 50 },
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 10_000 },
+    };
+    await queue.upsertJobScheduler(job.name, { every: job.everyMs }, { name: job.name, opts });
+  }
+
+  worker = new Worker(
+    QUEUE_NAME,
+    async (bullJob) => {
+      const job = SCHEDULED_JOBS.find((j) => j.name === bullJob.name);
+      if (!job) {
+        log.warn({ jobName: bullJob.name }, 'received unknown job — skipping');
+        return;
+      }
+      return job.run();
+    },
+    { connection: bullConnection, concurrency: 1 }
+  );
+
+  worker.on('failed', (bullJob, err) => {
+    log.error({ jobName: bullJob?.name, err }, 'scheduled job failed');
+  });
+
+  log.info(
+    { jobs: SCHEDULED_JOBS.map((j) => ({ name: j.name, everyMs: j.everyMs })) },
+    'background jobs started via BullMQ'
+  );
+}
+
+function startIntervalFallback(): void {
+  for (const job of SCHEDULED_JOBS) {
+    const timer = setInterval(() => {
+      job.run().catch((err) => {
+        log.error({ jobName: job.name, err }, 'scheduled job failed');
+      });
+    }, job.everyMs);
+    intervals.push(timer);
+  }
+  log.info(
+    { jobs: SCHEDULED_JOBS.map((j) => ({ name: j.name, everyMs: j.everyMs })) },
+    'background jobs started via in-process timers (set REDIS_URL for BullMQ)'
+  );
+}
+
+export async function stopJobs(): Promise<void> {
   for (const i of intervals) clearInterval(i);
   intervals.length = 0;
+
+  if (worker) {
+    await worker.close();
+    worker = null;
+  }
+  if (queue) {
+    await queue.close();
+    queue = null;
+  }
+  if (bullConnection) {
+    bullConnection.disconnect();
+    bullConnection = null;
+  }
   started = false;
 }
