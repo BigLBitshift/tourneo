@@ -26,6 +26,9 @@ const eventBaseFields = {
   special_notes: z.string().max(5000).optional(),
   rules_summary: z.string().max(10000).optional(),
   banner_image_url: z.string().url().max(500).optional(),
+  sponsor_name: z.string().max(100).optional(),
+  sponsor_logo_url: z.string().url().max(500).optional(),
+  sponsor_website_url: z.string().url().max(500).optional(),
   prize_distribution: z.array(
     z.object({
       place: z.number().int().positive(),

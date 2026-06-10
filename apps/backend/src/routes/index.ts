@@ -16,6 +16,9 @@ import { chatRouter } from './chat';
 import { meRouter } from './me';
 import { playersRouter } from './players';
 import { profilesRouter } from './profiles';
+import { bookingRouter } from './bookings';
+import { leaderboardRouter } from './leaderboard';
+import { americanoRouter } from './americano';
 
 const router = Router();
 
@@ -39,6 +42,9 @@ router.use('/players', playersRouter); // /players/search
 router.use('/profiles', profilesRouter); // /profiles/:id, /profiles/:id/head-to-head
 router.use('/membership', require('./membership').membershipRouter);
 router.use('/hall-of-fame', require('./hallOfFame').hallOfFameRouter);
+router.use('/bookings', bookingRouter); // court booking
+router.use('/leaderboard', leaderboardRouter); // city/global rankings
+router.use('/', americanoRouter); // /events/:id/americano + /americano/matches/:id/score
 
 // Health check
 router.get('/health', (_req, res) => {

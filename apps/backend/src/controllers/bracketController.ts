@@ -22,6 +22,36 @@ export class BracketController {
     }
   }
 
+  static async generateRoundRobin(req: Request, res: Response, next: NextFunction) {
+    try {
+      const eventId = parseInt(req.params.id, 10);
+      const bracket = await BracketService.generateRoundRobin(eventId, req.user!.userId);
+      res.status(201).json({ success: true, data: bracket });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getStandings(req: Request, res: Response, next: NextFunction) {
+    try {
+      const eventId = parseInt(req.params.id, 10);
+      const standings = await BracketService.getStandings(eventId);
+      res.json({ success: true, data: standings });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  static async getMatchCard(req: Request, res: Response, next: NextFunction) {
+    try {
+      const matchId = parseInt(req.params.matchId, 10);
+      const card = await BracketService.getMatchCard(matchId);
+      res.json({ success: true, data: card });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   static async enterResult(req: Request, res: Response, next: NextFunction) {
     try {
       const matchId = parseInt(req.params.id, 10);
