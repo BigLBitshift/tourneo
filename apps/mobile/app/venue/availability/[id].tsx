@@ -1,8 +1,15 @@
 /**
  * Court Availability Screen
- * - Shows next 14 days of available court slots for a venue
- * - Date chips at top for day selection
- * - Slot grid with price and booking link
+ *
+ *   - Horizontal day picker (next 14 days). Days with no slots are
+ *     visually dimmed and the dot is hidden.
+ *   - Slot grid for the selected day. Tapping an available slot opens
+ *     a confirmation sheet; tapping "Buchen" calls the in-app booking
+ *     API. If the slot only carries an external booking URL (legacy /
+ *     partner integration) we still link out.
+ *   - Optimistic UI is intentionally avoided here — the server holds the
+ *     slot lock, so we wait for its decision and surface 409s as a clear
+ *     "Slot ist gerade weg" toast.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -14,15 +21,18 @@ import {
   ActivityIndicator,
   Linking,
   RefreshControl,
-  Platform,
 } from 'react-native';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../../../src/providers/ThemeProvider';
 import { spacing, fontSize, fontWeight, radius } from '../../../src/theme/spacing';
 import { getVenueAvailability, type AvailabilitySlot } from '../../../src/api/v2';
 import type { Colors } from '../../../src/theme/colors';
+import { useBookingStore } from '../../../src/store/bookingStore';
+import { useAuthStore } from '../../../src/store/authStore';
+import { TModal } from '../../../src/components/common';
+import { useToast } from '../../../src/components/common';
 
 function buildNextDays(count: number): Date[] {
   const result: Date[] = [];
@@ -37,18 +47,33 @@ function buildNextDays(count: number): Date[] {
 }
 
 function dateKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  // Use local-time key so the picker matches the device's "today",
+  // not UTC midnight. toISOString().slice(0,10) would silently shift.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function formatTime(t: string): string {
-  // t is HH:MM:SS
+  // server format is HH:MM:SS
   return t.slice(0, 5);
+}
+
+function formatPrice(cents: number | null): string | null {
+  if (cents === null || cents === undefined) return null;
+  if (cents % 100 === 0) return `${cents / 100} €`;
+  return `${(cents / 100).toFixed(2)} €`;
 }
 
 export default function CourtAvailabilityScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const venueId = Number(id);
   const { colors } = useTheme();
+  const router = useRouter();
+  const { isAuthenticated } = useAuthStore();
+  const { book } = useBookingStore();
+  const showToast = useToast((s) => s.show);
 
   const days = useMemo(() => buildNextDays(14), []);
   const [selectedDate, setSelectedDate] = useState<Date>(days[0]);
@@ -56,6 +81,9 @@ export default function CourtAvailabilityScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [confirmSlot, setConfirmSlot] = useState<AvailabilitySlot | null>(null);
+  const [booking, setBooking] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -66,7 +94,9 @@ export default function CourtAvailabilityScreen() {
       });
       setSlots(data);
     } catch (err: any) {
-      setError(err?.response?.data?.error?.message || 'Verfügbarkeit konnte nicht geladen werden.');
+      setError(
+        err?.response?.data?.error?.message || 'Verfügbarkeit konnte nicht geladen werden.'
+      );
     }
   }, [venueId, days]);
 
@@ -97,11 +127,46 @@ export default function CourtAvailabilityScreen() {
       .sort((a, b) => a.slot_start.localeCompare(b.slot_start));
   }, [slots, selectedDate]);
 
-  const openBooking = (url: string | null) => {
-    if (!url) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Linking.openURL(url);
-  };
+  const onSlotPress = useCallback(
+    (slot: AvailabilitySlot) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      if (!isAuthenticated) {
+        router.push('/(auth)/login' as any);
+        return;
+      }
+      setConfirmSlot(slot);
+    },
+    [isAuthenticated, router]
+  );
+
+  const confirmBook = useCallback(async () => {
+    if (!confirmSlot) return;
+    setBooking(true);
+    try {
+      await book(confirmSlot.id);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      showToast('success', 'Platz gebucht', 'Siehe „Meine Buchungen"');
+      // Reflect the new booking locally so the slot can no longer be tapped.
+      setSlots((prev) =>
+        prev.map((s) => (s.id === confirmSlot.id ? { ...s, status: 'booked' } : s))
+      );
+      setConfirmSlot(null);
+    } catch (err: any) {
+      const code = err?.response?.status;
+      const msg =
+        code === 409
+          ? 'Dieser Slot wurde gerade gebucht. Bitte einen anderen wählen.'
+          : err?.response?.data?.error?.message || 'Buchung fehlgeschlagen.';
+      showToast('error', 'Buchung fehlgeschlagen', msg);
+      if (code === 409) {
+        // Refresh to drop the now-taken slot from the grid.
+        await load();
+        setConfirmSlot(null);
+      }
+    } finally {
+      setBooking(false);
+    }
+  }, [confirmSlot, book, showToast, load]);
 
   if (loading) {
     return (
@@ -115,7 +180,6 @@ export default function CourtAvailabilityScreen() {
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <Stack.Screen options={{ title: 'Platz-Verfügbarkeit', headerShown: true }} />
 
-      {/* Date chips */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -128,7 +192,7 @@ export default function CourtAvailabilityScreen() {
             <TouchableOpacity
               key={dateKey(d)}
               onPress={() => {
-                Haptics.selectionAsync();
+                Haptics.selectionAsync().catch(() => {});
                 setSelectedDate(d);
               }}
               style={[
@@ -136,6 +200,7 @@ export default function CourtAvailabilityScreen() {
                 {
                   backgroundColor: isSelected ? colors.primary : colors.surface,
                   borderColor: isSelected ? colors.primary : colors.cardBorder,
+                  opacity: hasSlots || isSelected ? 1 : 0.55,
                 },
               ]}
             >
@@ -165,11 +230,11 @@ export default function CourtAvailabilityScreen() {
 
       <ScrollView
         contentContainerStyle={styles.slotsContainer}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+        }
       >
-        {error && (
-          <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
-        )}
+        {error && <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>}
 
         {slotsForSelected.length === 0 ? (
           <View style={styles.empty}>
@@ -178,7 +243,7 @@ export default function CourtAvailabilityScreen() {
               Keine Verfügbarkeit
             </Text>
             <Text style={[styles.emptyText, { color: colors.textTertiary }]}>
-              Für diesen Tag sind keine Slots hinterlegt. Versuche einen anderen Tag.
+              Für diesen Tag sind keine Slots hinterlegt. Wähle einen anderen Tag.
             </Text>
           </View>
         ) : (
@@ -188,12 +253,90 @@ export default function CourtAvailabilityScreen() {
                 key={slot.id}
                 slot={slot}
                 colors={colors}
-                onBook={() => openBooking(slot.booking_url)}
+                onPress={() => onSlotPress(slot)}
               />
             ))}
           </View>
         )}
+
+        <TouchableOpacity
+          style={[styles.myBookingsLink, { borderColor: colors.cardBorder }]}
+          onPress={() => router.push('/(tabs)/profil')}
+        >
+          <Ionicons name="ticket-outline" size={18} color={colors.primary} />
+          <Text style={[styles.myBookingsText, { color: colors.textPrimary }]}>
+            Meine Buchungen ansehen
+          </Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+        </TouchableOpacity>
       </ScrollView>
+
+      <TModal
+        visible={!!confirmSlot}
+        onClose={() => !booking && setConfirmSlot(null)}
+        title="Platz buchen"
+      >
+        {confirmSlot && (
+          <View style={styles.modalContent}>
+            <Text style={[styles.modalLine, { color: colors.textPrimary }]}>
+              {selectedDate.toLocaleDateString('de-DE', {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'long',
+              })}
+            </Text>
+            <Text style={[styles.modalLineBig, { color: colors.textPrimary }]}>
+              {formatTime(confirmSlot.slot_start)} – {formatTime(confirmSlot.slot_end)}
+            </Text>
+            {formatPrice(confirmSlot.price_cents) && (
+              <Text style={[styles.modalPrice, { color: colors.primary }]}>
+                {formatPrice(confirmSlot.price_cents)}
+              </Text>
+            )}
+            <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+              Zahlung erfolgt vor Ort. Du kannst die Buchung bis 2 Stunden vor Start kostenfrei
+              stornieren.
+            </Text>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: colors.surfaceSecondary }]}
+                disabled={booking}
+                onPress={() => setConfirmSlot(null)}
+              >
+                <Text style={[styles.modalBtnText, { color: colors.textPrimary }]}>Abbrechen</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalBtn,
+                  { backgroundColor: colors.primary, opacity: booking ? 0.7 : 1 },
+                ]}
+                disabled={booking}
+                onPress={confirmBook}
+              >
+                {booking ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <Text style={[styles.modalBtnText, { color: '#FFF' }]}>Jetzt buchen</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {confirmSlot.booking_url && (
+              <TouchableOpacity
+                onPress={() => {
+                  Linking.openURL(confirmSlot.booking_url!);
+                  setConfirmSlot(null);
+                }}
+              >
+                <Text style={[styles.externalLink, { color: colors.textTertiary }]}>
+                  Stattdessen extern buchen ↗
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+      </TModal>
     </View>
   );
 }
@@ -201,44 +344,44 @@ export default function CourtAvailabilityScreen() {
 function SlotCard({
   slot,
   colors,
-  onBook,
+  onPress,
 }: {
   slot: AvailabilitySlot;
   colors: Colors;
-  onBook: () => void;
+  onPress: () => void;
 }) {
   const isAvailable = slot.status === 'available';
   const isBlocked = slot.status === 'blocked';
-  const price = slot.price_cents != null ? `${(slot.price_cents / 100).toFixed(0)}€` : null;
+  const price = formatPrice(slot.price_cents);
 
   return (
-    <View
+    <TouchableOpacity
+      disabled={!isAvailable}
+      onPress={onPress}
+      activeOpacity={0.85}
       style={[
         styles.slotCard,
         {
           backgroundColor: isAvailable ? colors.surface : colors.surfaceSecondary,
           borderColor: isAvailable ? colors.primary + '33' : colors.cardBorder,
-          opacity: isAvailable ? 1 : 0.5,
+          opacity: isAvailable ? 1 : 0.55,
         },
       ]}
     >
       <Text style={[styles.slotTime, { color: colors.textPrimary }]}>
         {formatTime(slot.slot_start)} – {formatTime(slot.slot_end)}
       </Text>
-      {price && (
-        <Text style={[styles.slotPrice, { color: colors.primary }]}>{price}</Text>
-      )}
-      {isAvailable && slot.booking_url && (
-        <TouchableOpacity onPress={onBook} style={[styles.bookBtn, { backgroundColor: colors.primary }]}>
+      {price && <Text style={[styles.slotPrice, { color: colors.primary }]}>{price}</Text>}
+      {isAvailable ? (
+        <View style={[styles.bookBtn, { backgroundColor: colors.primary }]}>
           <Text style={styles.bookText}>Buchen</Text>
-        </TouchableOpacity>
-      )}
-      {!isAvailable && (
+        </View>
+      ) : (
         <Text style={[styles.statusText, { color: colors.textTertiary }]}>
           {isBlocked ? 'Blockiert' : 'Gebucht'}
         </Text>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -265,25 +408,10 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  dayNum: {
-    fontSize: fontSize.xl,
-    fontWeight: '800' as any,
-  },
-  dayDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    marginTop: 2,
-  },
-  slotsContainer: {
-    padding: spacing.lg,
-    paddingBottom: 100,
-  },
-  slotGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
+  dayNum: { fontSize: fontSize.xl, fontWeight: '800' as any },
+  dayDot: { width: 4, height: 4, borderRadius: 2, marginTop: 2 },
+  slotsContainer: { padding: spacing.lg, paddingBottom: 100 },
+  slotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   slotCard: {
     width: '48%',
     padding: spacing.md,
@@ -305,9 +433,37 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', padding: spacing.xxl, gap: spacing.sm },
   emptyTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold as any },
   emptyText: { fontSize: fontSize.sm, textAlign: 'center', paddingHorizontal: spacing.lg },
-  errorText: {
-    fontSize: fontSize.sm,
+  errorText: { fontSize: fontSize.sm, textAlign: 'center', marginBottom: spacing.md },
+  myBookingsLink: {
+    marginTop: spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+  },
+  myBookingsText: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.semibold as any },
+  modalContent: { gap: spacing.sm, paddingTop: spacing.sm },
+  modalLine: { fontSize: fontSize.sm },
+  modalLineBig: { fontSize: fontSize.xl, fontWeight: '800' as any },
+  modalPrice: { fontSize: fontSize.lg, fontWeight: '800' as any, marginTop: spacing.xs },
+  modalHint: { fontSize: fontSize.xs, marginTop: spacing.sm, lineHeight: 18 },
+  modalActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
+  modalBtn: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  modalBtnText: { fontSize: fontSize.base, fontWeight: fontWeight.semibold as any },
+  externalLink: {
+    fontSize: fontSize.xs,
     textAlign: 'center',
-    marginBottom: spacing.md,
+    marginTop: spacing.md,
+    textDecorationLine: 'underline',
   },
 });

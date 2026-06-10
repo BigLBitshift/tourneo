@@ -16,6 +16,7 @@ export interface Event {
   is_indoor: boolean;
   is_outdoor: boolean;
   format: string;
+  elimination_type?: 'single_elimination' | 'double_elimination' | 'round_robin';
   max_participants: number;
   entry_fee_cents: number;
   currency: string;

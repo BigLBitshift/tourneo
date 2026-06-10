@@ -376,3 +376,184 @@ export async function getVenueAvailability(
   const res = await apiClient.get(`/venues/${venueId}/availability`, { params });
   return res.data.data;
 }
+
+// ─── Court bookings (in-app) ─────────────────────────────
+export type CourtBooking = {
+  id: number;
+  uuid: string;
+  slot_id: number;
+  venue_id: number;
+  court_id: number | null;
+  user_id: number;
+  status: 'confirmed' | 'cancelled';
+  price_cents: number | null;
+  currency: string;
+  payment_method: 'pay_at_venue' | 'card' | 'membership' | 'other';
+  notes: string | null;
+  booked_at: string;
+  cancelled_at: string | null;
+  slot_date: string;
+  slot_start: string;
+  slot_end: string;
+  venue_name: string | null;
+  venue_street: string | null;
+  venue_city: string | null;
+  court_name: string | null;
+};
+
+export async function bookSlot(slotId: number, notes?: string): Promise<CourtBooking> {
+  const res = await apiClient.post('/bookings', { slot_id: slotId, notes });
+  return res.data.data;
+}
+
+export async function listMyBookings(opts: { upcomingOnly?: boolean } = {}): Promise<CourtBooking[]> {
+  const params: Record<string, string> = {};
+  if (opts.upcomingOnly) params.upcoming = 'true';
+  const res = await apiClient.get('/bookings', { params });
+  return res.data.data;
+}
+
+export async function cancelBooking(bookingId: number): Promise<{ id: number; status: 'cancelled' }> {
+  const res = await apiClient.delete(`/bookings/${bookingId}`);
+  return res.data.data;
+}
+
+// ─── Leaderboard (city / global) ─────────────────────────
+export type LeaderboardCityEntry = {
+  rank: number;
+  user_id: number;
+  name: string;
+  avatar_url: string | null;
+  city: string | null;
+  elo: number;
+  tier: EloTier;
+  matches_played: number;
+};
+
+export async function getCityLeaderboard(opts: {
+  sport: 'padel' | 'fifa';
+  city?: string;
+  limit?: number;
+}): Promise<{
+  sport: 'padel' | 'fifa';
+  city: string | null;
+  entries: LeaderboardCityEntry[];
+  my_rank: number | null;
+}> {
+  const res = await apiClient.get('/leaderboard', { params: opts });
+  return res.data.data;
+}
+
+// ─── Round-robin standings ───────────────────────────────
+export type StandingsRow = {
+  rank: number;
+  registration_id: number;
+  name: string;
+  played: number;
+  wins: number;
+  losses: number;
+  sets_won: number;
+  sets_lost: number;
+  set_diff: number;
+  points: number;
+};
+
+export async function getEventStandings(eventId: number): Promise<{
+  event_id: number;
+  bracket_id: number;
+  type: 'round_robin';
+  standings: StandingsRow[];
+}> {
+  const res = await apiClient.get(`/matches/events/${eventId}/standings`);
+  return res.data.data;
+}
+
+// ─── Americano ───────────────────────────────────────────
+export type AmericanoPlayer = { user_id: number; name: string; avatar_url: string | null };
+export type AmericanoMatchView = {
+  id: number;
+  round_number: number;
+  court_number: number;
+  team_a: AmericanoPlayer[];
+  team_b: AmericanoPlayer[];
+  score_a: number | null;
+  score_b: number | null;
+  status: 'upcoming' | 'completed';
+};
+export type AmericanoSession = {
+  id: number;
+  event_id: number;
+  status: 'draft' | 'in_progress' | 'completed';
+  courts_count: number;
+  rounds_count: number;
+  points_per_match: number;
+  matches: AmericanoMatchView[];
+};
+
+export async function getAmericanoSession(eventId: number): Promise<AmericanoSession | null> {
+  try {
+    const res = await apiClient.get(`/events/${eventId}/americano`);
+    return res.data.data;
+  } catch (err: any) {
+    if (err?.response?.status === 404) return null;
+    throw err;
+  }
+}
+
+export type AmericanoStanding = {
+  rank: number;
+  user_id: number;
+  name: string;
+  avatar_url: string | null;
+  points: number;
+  played: number;
+  wins: number;
+};
+
+export async function getAmericanoStandings(eventId: number): Promise<AmericanoStanding[]> {
+  const res = await apiClient.get(`/events/${eventId}/americano/standings`);
+  return res.data.data.standings as AmericanoStanding[];
+}
+
+export async function postAmericanoScore(
+  matchId: number,
+  scoreA: number,
+  scoreB: number
+): Promise<{ id: number; score_a: number; score_b: number; status: 'completed' }> {
+  const res = await apiClient.post(`/americano/matches/${matchId}/score`, {
+    score_a: scoreA,
+    score_b: scoreB,
+  });
+  return res.data.data;
+}
+
+// ─── Shareable match card ────────────────────────────────
+export type MatchCardSide = {
+  registration_id: number;
+  players: Array<{ user_id: number; name: string; avatar_url: string | null }>;
+};
+export type MatchCard = {
+  match_id: number;
+  uuid: string;
+  round_name: string | null;
+  is_final: boolean;
+  completed_at: string | null;
+  winner_registration_id: number | null;
+  participant_1: MatchCardSide | null;
+  participant_2: MatchCardSide | null;
+  sets: Array<{ set: number; p1: number; p2: number; tiebreak: boolean }>;
+  elo_delta: number | null;
+  event: {
+    id: number;
+    title: string;
+    sport_category: 'padel' | 'fifa' | 'other';
+    sponsor_name: string | null;
+    sponsor_logo_url: string | null;
+  } | null;
+  venue: { id: number; name: string; city: string } | null;
+};
+
+export async function getMatchCard(matchId: number): Promise<MatchCard> {
+  const res = await apiClient.get(`/matches/${matchId}/card`);
+  return res.data.data;
+}

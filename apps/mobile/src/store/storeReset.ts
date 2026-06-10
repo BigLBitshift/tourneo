@@ -1,3 +1,4 @@
+import { useBookingStore } from './bookingStore';
 import { useCheckoutStore } from './checkoutStore';
 import { useCommunityStore } from './communityStore';
 import { useEventStore } from './eventStore';
@@ -19,6 +20,7 @@ import { useVenueStore } from './venueStore';
  * exports authStore alongside the other stores).
  */
 export async function resetAllUserStores(): Promise<void> {
+  useBookingStore.getState().reset();
   useCheckoutStore.getState().reset();
   useCommunityStore.getState().reset();
   useEventStore.getState().reset();
