@@ -385,7 +385,7 @@ export type CourtBooking = {
   venue_id: number;
   court_id: number | null;
   user_id: number;
-  status: 'confirmed' | 'cancelled';
+  status: 'pending_payment' | 'confirmed' | 'cancelled';
   price_cents: number | null;
   currency: string;
   payment_method: 'pay_at_venue' | 'card' | 'membership' | 'other';
@@ -399,6 +399,12 @@ export type CourtBooking = {
   venue_street: string | null;
   venue_city: string | null;
   court_name: string | null;
+  /**
+   * Present when the venue is Stripe-Connect-enabled and the slot is
+   * priced: the booking starts as pending_payment and this secret
+   * confirms the PaymentIntent. Null for pay-at-venue bookings.
+   */
+  client_secret?: string | null;
 };
 
 export async function bookSlot(slotId: number, notes?: string): Promise<CourtBooking> {

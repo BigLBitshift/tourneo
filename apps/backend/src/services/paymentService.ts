@@ -79,12 +79,26 @@ export class PaymentService {
 
   static async handleStripeWebhook(event: Stripe.Event) {
     switch (event.type) {
-      case 'payment_intent.succeeded':
-        await this.handlePaymentSuccess(event.data.object as Stripe.PaymentIntent);
+      case 'payment_intent.succeeded': {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        if (intent.metadata?.kind === 'court_booking') {
+          const { CourtBookingService } = await import('./courtBookingService');
+          await CourtBookingService.confirmPaidBooking(intent.id);
+        } else {
+          await this.handlePaymentSuccess(intent);
+        }
         break;
-      case 'payment_intent.payment_failed':
-        await this.handlePaymentFailure(event.data.object as Stripe.PaymentIntent);
+      }
+      case 'payment_intent.payment_failed': {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        if (intent.metadata?.kind === 'court_booking') {
+          const { CourtBookingService } = await import('./courtBookingService');
+          await CourtBookingService.failPaidBooking(intent.id);
+        } else {
+          await this.handlePaymentFailure(intent);
+        }
         break;
+      }
       case 'charge.refunded':
         await this.handleChargeRefunded(event.data.object as Stripe.Charge);
         break;

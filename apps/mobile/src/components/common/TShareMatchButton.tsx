@@ -1,10 +1,10 @@
 /**
  * TShareMatchButton — primary touch target on the match-result/recap UI.
  *
- * Wraps shareMatchById so callers only need to pass the matchId. Falls
- * back to a quiet no-op when the card endpoint says the match isn't
- * ready (still in progress, missing winner) — we don't want to throw an
- * error toast for a perfectly normal case.
+ * Tapping fetches the server-rendered match card and opens the
+ * ShareCardSheet (image preview → "Als Bild teilen" für Stories, oder
+ * klassisches Text-Sharing). Falls back to a quiet info toast when the
+ * match has no card yet (still in progress).
  */
 import React, { useState } from 'react';
 import {
@@ -19,7 +19,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../../providers/ThemeProvider';
 import { spacing, fontSize, fontWeight, radius } from '../../theme/spacing';
-import { shareMatchById } from '../../utils/shareMatch';
+import { getMatchCard, type MatchCard } from '../../api/v2';
+import { ShareCardSheet } from '../share/ShareCardSheet';
 import { useToast } from './TToast';
 
 interface TShareMatchButtonProps {
@@ -38,18 +39,23 @@ export const TShareMatchButton: React.FC<TShareMatchButtonProps> = ({
   const { colors } = useTheme();
   const showToast = useToast((s) => s.show);
   const [busy, setBusy] = useState(false);
+  const [card, setCard] = useState<MatchCard | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const onPress = async () => {
     if (busy) return;
     setBusy(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     try {
-      const ok = await shareMatchById(matchId);
-      if (!ok) {
+      const data = await getMatchCard(matchId);
+      setCard(data);
+      setSheetOpen(true);
+    } catch (err: any) {
+      if (err?.response?.status === 400 || err?.response?.status === 404) {
         showToast('info', 'Noch keine Match-Karte', 'Das Match ist noch nicht abgeschlossen.');
+      } else {
+        showToast('error', 'Teilen fehlgeschlagen');
       }
-    } catch {
-      showToast('error', 'Teilen fehlgeschlagen');
     } finally {
       setBusy(false);
     }
@@ -61,29 +67,33 @@ export const TShareMatchButton: React.FC<TShareMatchButtonProps> = ({
   const borderColor = isPrimary ? colors.primary : colors.cardBorder;
 
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={busy}
-      activeOpacity={0.85}
-      style={[
-        styles.btn,
-        {
-          backgroundColor: bg,
-          borderColor,
-          opacity: busy ? 0.7 : 1,
-        },
-        style,
-      ]}
-    >
-      {busy ? (
-        <ActivityIndicator color={textColor} />
-      ) : (
-        <>
-          <Ionicons name="share-social-outline" size={18} color={textColor} />
-          <Text style={[styles.label, { color: textColor }]}>{label}</Text>
-        </>
-      )}
-    </TouchableOpacity>
+    <>
+      <TouchableOpacity
+        onPress={onPress}
+        disabled={busy}
+        activeOpacity={0.85}
+        style={[
+          styles.btn,
+          {
+            backgroundColor: bg,
+            borderColor,
+            opacity: busy ? 0.7 : 1,
+          },
+          style,
+        ]}
+      >
+        {busy ? (
+          <ActivityIndicator color={textColor} />
+        ) : (
+          <>
+            <Ionicons name="share-social-outline" size={18} color={textColor} />
+            <Text style={[styles.label, { color: textColor }]}>{label}</Text>
+          </>
+        )}
+      </TouchableOpacity>
+
+      <ShareCardSheet visible={sheetOpen} card={card} onClose={() => setSheetOpen(false)} />
+    </>
   );
 };
 

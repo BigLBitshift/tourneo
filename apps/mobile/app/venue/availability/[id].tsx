@@ -25,6 +25,7 @@ import {
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as WebBrowser from 'expo-web-browser';
 import { useTheme } from '../../../src/providers/ThemeProvider';
 import { spacing, fontSize, fontWeight, radius } from '../../../src/theme/spacing';
 import { getVenueAvailability, type AvailabilitySlot } from '../../../src/api/v2';
@@ -143,14 +144,29 @@ export default function CourtAvailabilityScreen() {
     if (!confirmSlot) return;
     setBooking(true);
     try {
-      await book(confirmSlot.id);
+      const result = await book(confirmSlot.id);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      showToast('success', 'Platz gebucht', 'Siehe „Meine Buchungen"');
+
       // Reflect the new booking locally so the slot can no longer be tapped.
       setSlots((prev) =>
         prev.map((s) => (s.id === confirmSlot.id ? { ...s, status: 'booked' } : s))
       );
       setConfirmSlot(null);
+
+      if (result.status === 'pending_payment' && result.client_secret) {
+        // Stripe-connected venue: confirm the PaymentIntent in the hosted
+        // sheet. The webhook flips the booking to confirmed; unpaid
+        // bookings auto-expire after 15 minutes and free the slot.
+        showToast('info', 'Fast geschafft', 'Bitte Zahlung abschließen (15 Min Zeit).');
+        const paymentIntentId = result.client_secret.split('_secret')[0];
+        const url =
+          `https://hooks.stripe.com/redirect/authenticate/src_${paymentIntentId}` +
+          `?client_secret=${encodeURIComponent(result.client_secret)}` +
+          `&return_url=${encodeURIComponent('tourneo://booking/callback')}`;
+        await WebBrowser.openAuthSessionAsync(url, 'tourneo://booking/callback');
+      } else {
+        showToast('success', 'Platz gebucht', 'Siehe „Meine Buchungen"');
+      }
     } catch (err: any) {
       const code = err?.response?.status;
       const msg =

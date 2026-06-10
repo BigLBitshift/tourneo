@@ -6,6 +6,7 @@ import { THeader, TLoadingScreen, TEmptyState } from '../../../src/components/co
 import { BracketView } from '../../../src/components/brackets';
 import { MatchFeedbackModal } from '../../../src/components/MatchFeedbackModal';
 import { useAuthStore } from '../../../src/store/authStore';
+import { useLiveBracket } from '../../../src/hooks/useLiveBracket';
 import api from '../../../src/api/client';
 import { spacing, fontSize, fontWeight } from '../../../src/theme/spacing';
 
@@ -24,15 +25,25 @@ export default function BracketScreen() {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // WebSocket fast-path: the server pings when a result lands and we
+  // refetch immediately. Polling below remains as fallback for older
+  // backends / flaky connections, at a relaxed 30s instead of 10s.
+  const { lastUpdate, connected } = useLiveBracket(id ? Number(id) : null);
+  useEffect(() => {
+    if (lastUpdate) fetchBracket(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastUpdate]);
+
   useEffect(() => {
     fetchBracket(true);
 
-    // Live poll every 10s while at least one match is in_progress or scheduled today
+    // Fallback poll while the app is foregrounded. With a live socket we
+    // poll slowly (60s safety net), without one every 30s.
     const startPolling = () => {
       if (pollRef.current) return;
       pollRef.current = setInterval(() => {
         fetchBracket(false);
-      }, 10000);
+      }, connected ? 60000 : 30000);
     };
     const stopPolling = () => {
       if (pollRef.current) {
@@ -51,7 +62,8 @@ export default function BracketScreen() {
       stopPolling();
       sub.remove();
     };
-  }, [id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, connected]);
 
   const hasLiveMatch =
     bracket?.matches?.some((m: any) => m.status === 'in_progress') ?? false;

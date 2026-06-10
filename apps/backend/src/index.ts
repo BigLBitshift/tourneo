@@ -4,10 +4,12 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import compression from 'compression';
 import * as path from 'path';
+import { createServer } from 'http';
 import { env, validateEnv } from './config/environment';
 import { testConnection } from './config/database';
 import { apiRouter } from './routes';
 import { startJobs } from './jobs';
+import { initLiveBracket } from './realtime/liveBracket';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter } from './middleware/rateLimiter';
 import {
@@ -126,7 +128,12 @@ async function start() {
     }
   }
 
-  app.listen(env.port, () => {
+  // Shared HTTP server so the live-bracket WebSocket hub and Express
+  // listen on the same port (/ws is upgraded, everything else is HTTP).
+  const httpServer = createServer(app);
+  initLiveBracket(httpServer);
+
+  httpServer.listen(env.port, () => {
     console.log(`
 ╔══════════════════════════════════════════╗
 ║          🏆 TOURNEO API SERVER 🏆         ║

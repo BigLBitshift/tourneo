@@ -39,6 +39,7 @@
     "sharp": "^0.33.2",
     "stripe": "^14.11.0",
     "uuid": "^9.0.0",
+    "ws": "^8.21.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
@@ -53,6 +54,7 @@
     "@types/node": "^20.10.6",
     "@types/nodemailer": "^6.4.14",
     "@types/uuid": "^9.0.7",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.58.1",
     "@typescript-eslint/parser": "^8.58.1",
     "eslint": "^8.56.0",

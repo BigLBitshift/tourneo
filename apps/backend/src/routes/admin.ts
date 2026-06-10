@@ -1604,4 +1604,50 @@ router.post(
   }
 );
 
+// ============================================================
+// 11. STRIPE CONNECT (club payouts for court bookings)
+// ============================================================
+
+// Start (or resume) Express onboarding for a venue. Returns a one-time
+// URL the club owner opens to complete KYC at Stripe.
+router.post(
+  '/venues/:id/stripe/onboard',
+  superadminOnly,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const venueId = parseInt(req.params.id, 10);
+      const { StripeConnectService } = await import('../services/stripeConnectService');
+      const base = process.env.APP_URL || 'http://localhost:3000';
+      const result = await StripeConnectService.createOnboardingLink(
+        venueId,
+        `${base}/stripe/onboarding/complete?venue_id=${venueId}`,
+        `${base}/stripe/onboarding/refresh?venue_id=${venueId}`
+      );
+
+      await AuditService.logFromRequest(req, 'venue.stripe_onboarding_started', 'venue', venueId, {
+        metadata: { account_id: result.account_id },
+      });
+
+      res.json({ success: true, data: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Connection + payout status for a venue's Stripe account.
+router.get(
+  '/venues/:id/stripe/status',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const venueId = parseInt(req.params.id, 10);
+      const { StripeConnectService } = await import('../services/stripeConnectService');
+      const status = await StripeConnectService.getAccountStatus(venueId);
+      res.json({ success: true, data: status });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
 export { router as adminRouter };

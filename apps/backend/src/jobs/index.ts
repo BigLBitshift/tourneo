@@ -1,7 +1,10 @@
 import { Queue, Worker, type JobsOptions } from 'bullmq';
 import Redis from 'ioredis';
 import { sendMatchReminders } from './matchReminder';
+import { sendBookingReminders } from './bookingReminder';
+import { pushCityRankChanges } from './cityRankPush';
 import { RegistrationService } from '../services/registrationService';
+import { CourtBookingService } from '../services/courtBookingService';
 import { childLogger } from '../utils/logger';
 
 const log = childLogger('jobs');
@@ -38,6 +41,28 @@ const SCHEDULED_JOBS: ScheduledJob[] = [
     // but never scheduled — expired promotions piled up forever.
     everyMs: 15 * 60 * 1000,
     run: () => RegistrationService.expireUnpaidPromotions(),
+  },
+  {
+    name: 'booking-reminders',
+    // "Dein Platz wartet in ~2h" push — reduces no-shows. The job's
+    // 30-minute target window is wider than the run interval, so no
+    // booking can slip through between runs.
+    everyMs: 15 * 60 * 1000,
+    run: () => sendBookingReminders(),
+  },
+  {
+    name: 'booking-payment-expiry',
+    // Frees slots whose in-app payment was started but never completed
+    // (15-minute TTL on pending_payment bookings).
+    everyMs: 5 * 60 * 1000,
+    run: () => CourtBookingService.expireUnpaidBookings(),
+  },
+  {
+    name: 'city-rank-push',
+    // Daily snapshot of padel city ranks; pushes "you dropped to rank N"
+    // at most once per 6 days per user.
+    everyMs: 24 * 60 * 60 * 1000,
+    run: () => pushCityRankChanges(),
   },
 ];
 

@@ -668,6 +668,15 @@ export class BracketService {
       });
     });
 
+    // Live update for everyone watching this bracket (best-effort,
+    // in-process WebSocket hub).
+    try {
+      const { broadcastBracketUpdate } = await import('../realtime/liveBracket');
+      broadcastBracketUpdate(match.event_id);
+    } catch (err) {
+      console.warn('[brackets] live broadcast failed:', err);
+    }
+
     // Post-result hooks: ELO, achievements, finals → tournament completion
     try {
       const event = await db(t('events')).where('id', match.event_id).first();

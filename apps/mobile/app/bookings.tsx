@@ -67,7 +67,11 @@ export default function MyBookingsScreen() {
     );
     return {
       upcoming: sorted
-        .filter((b) => b.status === 'confirmed' && startTimeOf(b).getTime() >= now)
+        .filter(
+          (b) =>
+            (b.status === 'confirmed' || b.status === 'pending_payment') &&
+            startTimeOf(b).getTime() >= now
+        )
         .reverse(), // soonest first
       past: sorted.filter(
         (b) => b.status === 'cancelled' || startTimeOf(b).getTime() < now
@@ -153,7 +157,12 @@ export default function MyBookingsScreen() {
             {isCancelled && (
               <Text style={[styles.cardStatus, { color: colors.error }]}>Storniert</Text>
             )}
-            {!isCancelled && isPast && (
+            {item.status === 'pending_payment' && (
+              <Text style={[styles.cardStatus, { color: colors.warning }]}>
+                Zahlung offen
+              </Text>
+            )}
+            {!isCancelled && item.status !== 'pending_payment' && isPast && (
               <Text style={[styles.cardStatus, { color: colors.textTertiary }]}>Vergangen</Text>
             )}
           </View>
