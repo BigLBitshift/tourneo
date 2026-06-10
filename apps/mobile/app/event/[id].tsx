@@ -40,6 +40,7 @@ import {
 import { fontFamily } from '../../src/theme/typography';
 import { useEventStore } from '../../src/store/eventStore';
 import { useAuthStore } from '../../src/store/authStore';
+import { StandingsTable, AmericanoView } from '../../src/components/events';
 
 export default function EventDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -252,6 +253,19 @@ export default function EventDetailScreen() {
             </NCCard>
           </View>
         ) : null}
+
+        {/* Round-robin standings + Americano session.
+            Both components self-handle the empty case (return null) so a
+            non-Americano single-elim event simply doesn't render them. */}
+        {e.elimination_type === 'round_robin' && (
+          <View style={{ paddingHorizontal: 20, paddingTop: 20, gap: 12 }}>
+            <Text style={s.subTitle}>Tabelle</Text>
+            <StandingsTable eventId={e.id} />
+          </View>
+        )}
+        <View style={{ paddingHorizontal: 20, paddingTop: 20, gap: 12 }}>
+          <AmericanoView eventId={e.id} currentUserId={user?.id} />
+        </View>
 
         {/* Cancellation */}
         <View style={{ paddingHorizontal: 20, paddingTop: 20 }}>

@@ -39,6 +39,9 @@ export const deepLinks = {
   bracket(eventId: number | string): string {
     return deepLinks.web(`event/bracket/${eventId}`);
   },
+  match(matchId: number | string): string {
+    return deepLinks.web(`match/${matchId}`);
+  },
 };
 
 /**

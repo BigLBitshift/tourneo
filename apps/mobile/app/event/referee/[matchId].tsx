@@ -24,7 +24,7 @@ import {
   postMatchScore,
   type MatchSet,
 } from '../../../src/api/v2';
-import { shareMatchResult } from '../../../src/utils/shareMatch';
+import { shareMatchById } from '../../../src/utils/shareMatch';
 
 export default function RefereeScreen() {
   const { matchId } = useLocalSearchParams<{ matchId: string }>();
@@ -73,34 +73,20 @@ export default function RefereeScreen() {
       await postMatchScore(id, sets);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // Determine winner based on sets won
-      const p1Sets = sets.filter((s) => s.p1 > s.p2).length;
-      const p2Sets = sets.filter((s) => s.p2 > s.p1).length;
-      const winnerIsP1 = p1Sets > p2Sets;
-      const winnerName = winnerIsP1 ? match?.participant_1_name : match?.participant_2_name;
-      const loserName = winnerIsP1 ? match?.participant_2_name : match?.participant_1_name;
-
-      Alert.alert(
-        'Ergebnis gespeichert',
-        'Das Match-Ergebnis wurde übermittelt.',
-        [
-          { text: 'Schließen', style: 'cancel', onPress: () => router.back() },
-          winnerName && loserName
-            ? {
-                text: 'Teilen',
-                onPress: async () => {
-                  await shareMatchResult({
-                    winnerName,
-                    loserName,
-                    sets,
-                    eventTitle: match?.event_title,
-                  });
-                  router.back();
-                },
-              }
-            : { text: 'OK', onPress: () => router.back() },
-        ].filter(Boolean) as any,
-      );
+      Alert.alert('Ergebnis gespeichert', 'Das Match-Ergebnis wurde übermittelt.', [
+        { text: 'Schließen', style: 'cancel', onPress: () => router.back() },
+        {
+          text: 'Teilen',
+          // Use shareMatchById: the backend has just finalised the match
+          // and computed the ELO delta, so the share card contains the
+          // sponsor logo and rating change without us reassembling it
+          // client-side.
+          onPress: async () => {
+            await shareMatchById(id);
+            router.back();
+          },
+        },
+      ]);
     } catch (err: any) {
       Alert.alert(
         'Fehler',
