@@ -4,6 +4,7 @@ import { AppError } from '../middleware/errorHandler';
 import { EloService } from './eloService';
 import { AchievementService } from './achievementService';
 import { NotificationService } from './notificationService';
+import { generateRoundRobinPairings } from '../utils/scheduling';
 
 interface BracketMatch {
   round: number;
@@ -158,6 +159,216 @@ export class BracketService {
     return this.getBracket(eventId);
   }
 
+  /**
+   * Generates a round-robin (league) schedule: every confirmed, checked-in
+   * registration plays every other exactly once. Reuses the brackets +
+   * matches tables — round-robin matches simply have no next_match_id and
+   * never set is_final, so the existing scoring path (enterMatchResult,
+   * ELO, achievements) works unchanged while tournament-completion logic
+   * stays dormant.
+   */
+  static async generateRoundRobin(eventId: number, userId: number) {
+    const event = await db(t('events')).where('id', eventId).first();
+    if (!event) throw AppError.notFound('Event');
+
+    const existingBracket = await db(t('brackets')).where('event_id', eventId).first();
+    if (existingBracket && existingBracket.status !== 'draft') {
+      throw AppError.badRequest('Bracket has already been published');
+    }
+
+    const registrations = await db(t('registrations'))
+      .where('event_id', eventId)
+      .where('status', 'confirmed')
+      .where('checked_in', true)
+      .orderByRaw('seed_number IS NULL, seed_number ASC, created_at ASC');
+
+    if (registrations.length < 2) {
+      throw AppError.badRequest('Need at least 2 confirmed participants to generate a round robin');
+    }
+
+    const pairings = generateRoundRobinPairings<number>(
+      registrations.map((r: any) => r.id as number)
+    );
+    const totalRounds = pairings.reduce((max, p) => Math.max(max, p.round), 0);
+    const now = new Date();
+
+    await db.transaction(async (trx) => {
+      if (existingBracket) {
+        await trx(t('matches')).where('bracket_id', existingBracket.id).del();
+        await trx(t('brackets')).where('id', existingBracket.id).del();
+      }
+
+      const [bracketId] = await trx(t('brackets')).insert({
+        event_id: eventId,
+        structure: JSON.stringify({
+          type: 'round_robin',
+          participant_count: registrations.length,
+          total_rounds: totalRounds,
+          total_matches: pairings.length,
+        }),
+        total_rounds: totalRounds,
+        status: 'draft',
+        generated_at: now,
+        created_at: now,
+        updated_at: now,
+      });
+
+      let matchNumber = 1;
+      for (const pairing of pairings) {
+        await trx(t('matches')).insert({
+          uuid: uuidv4(),
+          event_id: eventId,
+          bracket_id: bracketId,
+          round_number: pairing.round,
+          match_number: matchNumber++,
+          round_name: `Spieltag ${pairing.round}`,
+          participant_1_registration_id: pairing.home,
+          participant_2_registration_id: pairing.away,
+          is_third_place_match: false,
+          is_final: false,
+          status: 'upcoming',
+          created_at: now,
+          updated_at: now,
+        });
+      }
+
+      await trx(t('audit_log')).insert({
+        user_id: userId,
+        action: 'bracket.round_robin_generated',
+        entity_type: 'bracket',
+        entity_id: bracketId,
+        new_values: JSON.stringify({
+          rounds: totalRounds,
+          matches: pairings.length,
+          participants: registrations.length,
+        }),
+        created_at: now,
+      });
+    });
+
+    return this.getBracket(eventId);
+  }
+
+  /**
+   * League table for a round-robin event. 3 points per win; ties broken by
+   * set difference, then sets won.
+   */
+  static async getStandings(eventId: number) {
+    const bracket = await db(t('brackets')).where('event_id', eventId).first();
+    if (!bracket) throw AppError.notFound('Bracket');
+
+    const matches = await db(t('matches'))
+      .where('bracket_id', bracket.id)
+      .select(
+        'id',
+        'participant_1_registration_id',
+        'participant_2_registration_id',
+        'winner_registration_id',
+        'status'
+      );
+
+    const scores = await db(t('match_scores')).whereIn(
+      'match_id',
+      matches.map((m: any) => m.id)
+    );
+    const scoresByMatch = new Map<number, any[]>();
+    for (const s of scores) {
+      if (!scoresByMatch.has(s.match_id)) scoresByMatch.set(s.match_id, []);
+      scoresByMatch.get(s.match_id)!.push(s);
+    }
+
+    interface Row {
+      registration_id: number;
+      played: number;
+      wins: number;
+      losses: number;
+      sets_won: number;
+      sets_lost: number;
+      points: number;
+    }
+    const rows = new Map<number, Row>();
+    const ensure = (regId: number): Row => {
+      if (!rows.has(regId)) {
+        rows.set(regId, {
+          registration_id: regId,
+          played: 0,
+          wins: 0,
+          losses: 0,
+          sets_won: 0,
+          sets_lost: 0,
+          points: 0,
+        });
+      }
+      return rows.get(regId)!;
+    };
+
+    for (const m of matches) {
+      if (m.participant_1_registration_id) ensure(m.participant_1_registration_id);
+      if (m.participant_2_registration_id) ensure(m.participant_2_registration_id);
+      if (m.status !== 'completed' || !m.winner_registration_id) continue;
+      const p1 = m.participant_1_registration_id;
+      const p2 = m.participant_2_registration_id;
+      if (!p1 || !p2) continue;
+
+      const r1 = ensure(p1);
+      const r2 = ensure(p2);
+      r1.played++;
+      r2.played++;
+
+      for (const set of scoresByMatch.get(m.id) ?? []) {
+        if (set.participant_1_score > set.participant_2_score) {
+          r1.sets_won++;
+          r2.sets_lost++;
+        } else if (set.participant_2_score > set.participant_1_score) {
+          r2.sets_won++;
+          r1.sets_lost++;
+        }
+      }
+
+      const winner = m.winner_registration_id === p1 ? r1 : r2;
+      const loser = winner === r1 ? r2 : r1;
+      winner.wins++;
+      winner.points += 3;
+      loser.losses++;
+    }
+
+    // Resolve display names for each registration
+    const regIds = [...rows.keys()];
+    const names = regIds.length
+      ? await db(`${t('registrations')} as r`)
+          .leftJoin(`${t('profiles')} as p`, 'r.user_id', 'p.user_id')
+          .whereIn('r.id', regIds)
+          .select('r.id', 'p.display_name', 'p.first_name', 'p.last_name')
+      : [];
+    const nameOf = new Map<number, string>(
+      names.map((n: any) => [
+        n.id,
+        n.display_name || [n.first_name, n.last_name].filter(Boolean).join(' ') || 'Spieler',
+      ])
+    );
+
+    const table = [...rows.values()]
+      .sort(
+        (a, b) =>
+          b.points - a.points ||
+          b.sets_won - b.sets_lost - (a.sets_won - a.sets_lost) ||
+          b.sets_won - a.sets_won
+      )
+      .map((row, idx) => ({
+        rank: idx + 1,
+        name: nameOf.get(row.registration_id) ?? 'Spieler',
+        ...row,
+        set_diff: row.sets_won - row.sets_lost,
+      }));
+
+    return {
+      event_id: eventId,
+      bracket_id: bracket.id,
+      type: 'round_robin',
+      standings: table,
+    };
+  }
+
   static async getBracket(eventId: number) {
     const bracket = await db(t('brackets')).where('event_id', eventId).first();
     if (!bracket) throw AppError.notFound('Bracket');
@@ -248,6 +459,98 @@ export class BracketService {
       total_rounds: bracket.total_rounds,
       status: bracket.status,
       matches: enrichedMatches,
+    };
+  }
+
+  /**
+   * Compact, share-ready summary of a completed match — everything the
+   * mobile app needs to render a social match card (players, score line,
+   * event, venue, sponsor, ELO delta).
+   */
+  static async getMatchCard(matchId: number) {
+    const match = await db(t('matches')).where('id', matchId).first();
+    if (!match) throw AppError.notFound('Match');
+    if (match.status !== 'completed' && match.status !== 'walkover') {
+      throw AppError.badRequest('Match card is only available for completed matches');
+    }
+
+    const event = await db(t('events')).where('id', match.event_id).first();
+    const venue = event?.venue_id
+      ? await db(t('venues')).where('id', event.venue_id).first()
+      : null;
+
+    const sideInfo = async (regId: number | null) => {
+      if (!regId) return null;
+      const reg = await db(t('registrations')).where('id', regId).first();
+      if (!reg) return null;
+      const userIds = [reg.user_id, reg.partner_user_id].filter(
+        (id: unknown): id is number => typeof id === 'number'
+      );
+      const profiles = await db(t('profiles'))
+        .whereIn('user_id', userIds)
+        .select('user_id', 'display_name', 'first_name', 'last_name', 'avatar_url');
+      return {
+        registration_id: regId,
+        players: profiles.map((p: any) => ({
+          user_id: p.user_id,
+          name:
+            p.display_name || [p.first_name, p.last_name].filter(Boolean).join(' ') || 'Spieler',
+          avatar_url: p.avatar_url ?? null,
+        })),
+      };
+    };
+
+    const [participant1, participant2] = await Promise.all([
+      sideInfo(match.participant_1_registration_id),
+      sideInfo(match.participant_2_registration_id),
+    ]);
+
+    const scores = await db(t('match_scores'))
+      .where('match_id', matchId)
+      .orderBy('set_number', 'asc')
+      .select('set_number', 'participant_1_score', 'participant_2_score', 'is_tiebreak');
+
+    // ELO delta of the winning side (recorded by EloService per player)
+    const winnerUserIds = (
+      match.winner_registration_id === match.participant_1_registration_id
+        ? participant1
+        : participant2
+    )?.players.map((p) => p.user_id) ?? [];
+    let eloDelta: number | null = null;
+    if (winnerUserIds.length) {
+      const history = await db(t('rating_history'))
+        .where('match_id', matchId)
+        .whereIn('user_id', winnerUserIds)
+        .first('delta');
+      eloDelta = history ? Number(history.delta) : null;
+    }
+
+    return {
+      match_id: match.id,
+      uuid: match.uuid,
+      round_name: match.round_name,
+      is_final: Boolean(match.is_final),
+      completed_at: match.completed_at,
+      winner_registration_id: match.winner_registration_id,
+      participant_1: participant1,
+      participant_2: participant2,
+      sets: scores.map((s: any) => ({
+        set: s.set_number,
+        p1: s.participant_1_score,
+        p2: s.participant_2_score,
+        tiebreak: Boolean(s.is_tiebreak),
+      })),
+      elo_delta: eloDelta,
+      event: event
+        ? {
+            id: event.id,
+            title: event.title,
+            sport_category: event.sport_category,
+            sponsor_name: event.sponsor_name ?? null,
+            sponsor_logo_url: event.sponsor_logo_url ?? null,
+          }
+        : null,
+      venue: venue ? { id: venue.id, name: venue.name, city: venue.address_city } : null,
     };
   }
 
@@ -370,7 +673,21 @@ export class BracketService {
       const event = await db(t('events')).where('id', match.event_id).first();
       const sport = event?.sport_category === 'fifa' ? 'fifa' : 'padel';
       if (sport === 'padel' || sport === 'fifa') {
-        await EloService.updateAfterMatch(matchId, sport);
+        const eloResult = await EloService.updateAfterMatch(matchId, sport);
+        // Rival push: tell overtaken friends they just lost their spot.
+        if (eloResult) {
+          try {
+            const { RivalService } = await import('./rivalService');
+            await RivalService.notifyOvertakenRivals(
+              eloResult.winner.userId,
+              sport,
+              eloResult.winner.oldElo,
+              eloResult.winner.newElo
+            );
+          } catch (err) {
+            console.warn('[brackets] rival notification failed:', err);
+          }
+        }
       }
 
       // Achievement evaluation for the winning side
