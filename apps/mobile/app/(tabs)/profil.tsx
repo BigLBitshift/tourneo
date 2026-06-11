@@ -241,6 +241,7 @@ export default function ProfilScreen() {
               label="Benachrichtigungen"
               onPress={() => router.push('/notifications')}
             />
+            <SettingRow icon="flame" label="Challenges & Streak" onPress={() => router.push('/challenges')} />
             <SettingRow icon="settings" label="Einstellungen" onPress={() => router.push('/settings')} />
             <SettingRow icon="users" label="Mein QR-Code" onPress={() => router.push('/my-qr')} />
             <SettingRow icon="shield" label="Rechtliches" onPress={() => router.push('/legal/datenschutz')} />

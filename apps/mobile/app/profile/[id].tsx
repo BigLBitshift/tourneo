@@ -16,6 +16,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Share,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -29,9 +30,12 @@ import {
   getPublicProfile,
   getHeadToHead,
   getPlayerEloHistory,
+  createChallenge,
   type PublicPlayerProfile,
   type HeadToHead as HeadToHeadData,
 } from '../../src/api/v2';
+import { useToast } from '../../src/components/common';
+import * as Haptics from 'expo-haptics';
 
 type Sport = 'padel' | 'fifa';
 
@@ -150,6 +154,14 @@ export default function PlayerProfileScreen() {
             <Text style={styles.metaText}>Dabei seit {new Date(profile.member_since).getFullYear()}</Text>
           </View>
           {profile.bio && <Text style={styles.bio}>{profile.bio}</Text>}
+          {!isSelf && !notDiscoverable && (
+            <ChallengeButton
+              targetUserId={targetId}
+              targetName={profile.display_name}
+              sport={sport}
+              colors={colors}
+            />
+          )}
         </View>
 
         {notDiscoverable && (
@@ -257,6 +269,86 @@ export default function PlayerProfileScreen() {
         )}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function ChallengeButton({
+  targetUserId,
+  targetName,
+  sport,
+  colors,
+}: {
+  targetUserId: number;
+  targetName: string;
+  sport: Sport;
+  colors: Colors;
+}) {
+  const showToast = useToast((s) => s.show);
+  const [busy, setBusy] = useState(false);
+
+  const onChallenge = async () => {
+    if (busy) return;
+    Alert.alert(
+      `${targetName} herausfordern?`,
+      'Wir senden eine Match-Anfrage. Sobald sie zustimmt, könnt ihr Platz und Zeit absprechen.',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Herausfordern',
+          onPress: async () => {
+            setBusy(true);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+            try {
+              await createChallenge(targetUserId, { sport });
+              showToast(
+                'success',
+                'Herausforderung gesendet',
+                `Wir benachrichtigen dich, sobald ${targetName} antwortet.`
+              );
+            } catch (err: any) {
+              const msg =
+                err?.response?.data?.error?.message ||
+                'Anfrage konnte nicht gesendet werden.';
+              showToast('error', 'Fehler', msg);
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  return (
+    <TouchableOpacity
+      onPress={onChallenge}
+      disabled={busy}
+      activeOpacity={0.85}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: colors.primary as string,
+        paddingHorizontal: spacing.lg,
+        paddingVertical: spacing.sm,
+        borderRadius: radius.md,
+        marginTop: spacing.md,
+        opacity: busy ? 0.7 : 1,
+        minHeight: 42,
+        justifyContent: 'center',
+      }}
+    >
+      {busy ? (
+        <ActivityIndicator color="#FFF" />
+      ) : (
+        <>
+          <Ionicons name="flash" size={16} color="#FFF" />
+          <Text style={{ color: '#FFF', fontSize: fontSize.sm, fontWeight: fontWeight.bold as any }}>
+            Herausfordern
+          </Text>
+        </>
+      )}
+    </TouchableOpacity>
   );
 }
 

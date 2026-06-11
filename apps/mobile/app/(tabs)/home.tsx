@@ -416,18 +416,34 @@ export default function HomeScreen() {
           <View style={{ paddingHorizontal: 20, gap: 10 }}>
             <View style={s.tileRow}>
               <NCQuickTile
-                icon="bolt"
-                label="Matchmaking"
-                sub="Finde einen Gegner"
-                hue={260}
-                onPress={() => router.push('/matchmaking')}
+                icon="zap"
+                label="Spiel jetzt"
+                sub="Match in 1 Tap"
+                hue={280}
+                onPress={() => router.push('/play-now')}
               />
               <NCQuickTile
-                icon="users"
-                label="Community"
-                sub="Spieler & Teams"
-                hue={140}
-                onPress={() => router.push('/(tabs)/community')}
+                icon="flame"
+                label="Challenges"
+                sub="Streak halten"
+                hue={20}
+                onPress={() => router.push('/challenges')}
+              />
+            </View>
+            <View style={s.tileRow}>
+              <NCQuickTile
+                icon="bell"
+                label="Aktivität"
+                sub="Was Freunde spielen"
+                hue={220}
+                onPress={() => router.push('/feed')}
+              />
+              <NCQuickTile
+                icon="bolt"
+                label="Matchmaking"
+                sub="Spieler nach ELO"
+                hue={260}
+                onPress={() => router.push('/matchmaking')}
               />
             </View>
             <View style={s.tileRow}>

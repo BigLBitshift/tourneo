@@ -44,7 +44,7 @@ function NightCourtTabBar({ state, descriptors, navigation }: any) {
   const slots: TabSlot[] = [
     { kind: 'tab', key: 'home', label: 'Home', icon: 'home', route: 'home', badge: unreadCount },
     { kind: 'tab', key: 'turniere', label: 'Turniere', icon: 'trophy', route: 'turniere' },
-    { kind: 'fab', key: 'fab', route: '/matchmaking' },
+    { kind: 'fab', key: 'fab', route: '/play-now' },
     { kind: 'tab', key: 'community', label: 'Community', icon: 'users', route: '/(tabs)/community' },
     { kind: 'tab', key: 'profil', label: 'Profil', icon: 'user', route: 'profil' },
   ];
