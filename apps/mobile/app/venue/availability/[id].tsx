@@ -36,6 +36,7 @@ import {
   type QueueStanding,
 } from '../../../src/api/v2';
 import { useTopic } from '../../../src/realtime/RealtimeProvider';
+import { MEMBERSHIPS_PURCHASABLE } from '../../../src/config/features';
 import type { Colors } from '../../../src/theme/colors';
 import { useBookingStore } from '../../../src/store/bookingStore';
 import { useAuthStore } from '../../../src/store/authStore';
@@ -447,7 +448,8 @@ export default function CourtAvailabilityScreen() {
                   </Text>
                 )}
                 {/* Only shown when upgrading would genuinely move them up. */}
-                {standing.position_if_plus !== null &&
+                {MEMBERSHIPS_PURCHASABLE &&
+                  standing.position_if_plus !== null &&
                   standing.position_if_plus < standing.position && (
                     <TouchableOpacity
                       onPress={() => {

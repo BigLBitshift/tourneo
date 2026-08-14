@@ -27,6 +27,7 @@ import {
 } from '../src/components/nightcourt';
 import { fontFamily } from '../src/theme/typography';
 import { useAuthStore } from '../src/store/authStore';
+import { MEMBERSHIPS_PURCHASABLE } from '../src/config/features';
 import { useMembershipStore, type MembershipTier } from '../src/store/membershipStore';
 
 const TIER_ICON: Record<MembershipTier, IconName> = {
@@ -54,6 +55,10 @@ export default function MembershipScreen() {
   const tier = tiers.find((t) => t.tier === selected) ?? tiers[0];
 
   const handlePurchase = () => {
+    // Unreachable while MEMBERSHIPS_PURCHASABLE is false — the CTA that
+    // called this is not rendered. Kept so the paid flow has one place to
+    // return to once StoreKit lands.
+    if (!MEMBERSHIPS_PURCHASABLE) return;
     if (!user) {
       Alert.alert(
         'Anmeldung erforderlich',
@@ -66,11 +71,6 @@ export default function MembershipScreen() {
       return;
     }
     if (selected === 'free') return;
-    Alert.alert(
-      `Tourneo ${selected === 'club' ? 'Club' : 'Plus'} starten`,
-      'In der Produktionsversion wird hier der Apple-Kaufdialog angezeigt. Dies ist eine Demo-Version.',
-      [{ text: 'OK' }]
-    );
   };
 
   return (
@@ -253,8 +253,10 @@ export default function MembershipScreen() {
         </Text>
       </ScrollView>
 
-      {/* Sticky CTA */}
-      {selected !== 'free' && (
+      {/* Sticky CTA — only when a purchase can actually complete. An
+          advertised price with a button that cannot charge is an App
+          Store 2.1 rejection, so the whole footer is absent instead. */}
+      {MEMBERSHIPS_PURCHASABLE && selected !== 'free' && (
         <View style={s.footer}>
           <LinearGradient
             colors={['rgba(10,10,20,0)', NC.bg]}
@@ -274,6 +276,20 @@ export default function MembershipScreen() {
                 : '0,00'
             }€/Monat`}
           </NCButton>
+        </View>
+      )}
+
+      {!MEMBERSHIPS_PURCHASABLE && selected !== 'free' && (
+        <View style={s.footer}>
+          <LinearGradient
+            colors={['rgba(10,10,20,0)', NC.bg]}
+            style={[StyleSheet.absoluteFill, { top: -30 }]}
+            pointerEvents="none"
+          />
+          <Text style={s.comingSoon}>
+            Mitgliedschaften kommen bald. Alle Turniere und Platzbuchungen sind derzeit für alle
+            Mitglieder geöffnet.
+          </Text>
         </View>
       )}
     </NCScreen>
@@ -426,5 +442,11 @@ const s = StyleSheet.create({
     paddingBottom: 28,
     paddingHorizontal: 20,
     backgroundColor: NC.bg,
+  },
+  comingSoon: {
+    color: NC.textS,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
   },
 });

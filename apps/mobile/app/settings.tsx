@@ -388,11 +388,6 @@ export default function SettingsScreen() {
             leftIcon={<Ionicons name="key-outline" size={20} color={colors.textSecondary as string} />}
             onPress={() => Alert.alert(t('common.info'), t('settings.changePasswordHint'))}
           />
-          <TListItem
-            title={t('settings.restorePurchases')}
-            leftIcon={<Ionicons name="refresh-outline" size={20} color={colors.textSecondary as string} />}
-            onPress={() => Alert.alert(t('common.info'), t('settings.restorePurchasesHint'))}
-          />
           <TDivider style={{ marginVertical: spacing.xs }} />
           <TButton
             title={t('settings.logout')}

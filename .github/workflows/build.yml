@@ -140,13 +140,24 @@ jobs:
 
       - name: Smoke-test the image
         run: |
-          # The container must at minimum start, serve liveness, and shut
-          # down on SIGTERM. A DB is not available here, which is exactly
-          # why /health is dependency-free and /ready is not.
+          # The container must start, serve liveness, and exit on SIGTERM.
+          # No database is available here, which is exactly why /health is
+          # dependency-free and /ready is not.
+          #
+          # validateEnv() fail-fasts in production on missing config, so
+          # every variable it demands must be present or the process exits
+          # before it ever listens. These are throwaway placeholders — just
+          # enough for the container to boot and prove the image works.
+          # No Stripe keys: with PAYMENTS_ENABLED unset they are not
+          # required, and stuffing fake ones in is how a test key ends up
+          # in a production deploy later.
           docker run -d --name tourneo-api-smoke -p 3000:3000 \
             -e NODE_ENV=production \
-            -e JWT_ACCESS_SECRET=smoke-test-secret-at-least-32-chars-long \
-            -e JWT_REFRESH_SECRET=smoke-test-refresh-at-least-32-chars-long \
+            -e JWT_ACCESS_SECRET=smoke-test-access-secret-at-least-32-chars \
+            -e JWT_REFRESH_SECRET=smoke-test-refresh-secret-at-least-32-ch \
+            -e APP_URL=https://smoke.invalid \
+            -e ADMIN_URL=https://admin.smoke.invalid \
+            -e DB_PASSWORD=smoke \
             tourneo-api:${{ github.sha }}
 
           for i in $(seq 1 30); do
@@ -162,9 +173,18 @@ jobs:
             sleep 2
           done
 
-          # Graceful shutdown must actually exit, not be killed after the
-          # 10s Docker timeout.
+          # Graceful shutdown must actually exit on SIGTERM. Without tini
+          # as PID 1 Node never receives it, docker falls back to SIGKILL
+          # after the timeout, and every in-flight request dies with it —
+          # so a slow stop here is a real regression, not noise.
           start=$(date +%s)
           docker stop --time 20 tourneo-api-smoke
-          echo "shutdown took $(( $(date +%s) - start ))s"
+          elapsed=$(( $(date +%s) - start ))
+          echo "shutdown took ${elapsed}s"
           docker logs tourneo-api-smoke | tail -20
+
+          if [ "$elapsed" -ge 20 ]; then
+            echo "❌ container had to be killed — SIGTERM was not handled"
+            exit 1
+          fi
+          echo "✅ graceful shutdown in ${elapsed}s"

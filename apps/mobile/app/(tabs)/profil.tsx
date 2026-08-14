@@ -31,6 +31,7 @@ import {
 } from '../../src/components/nightcourt';
 import { fontFamily } from '../../src/theme/typography';
 import { useAuthStore } from '../../src/store/authStore';
+import { MEMBERSHIPS_PURCHASABLE } from '../../src/config/features';
 import { getMyElo, getMyAchievements, type EloTier } from '../../src/api/v2';
 
 interface EloPart {
@@ -191,8 +192,10 @@ export default function ProfilScreen() {
           </NCSection>
         ) : null}
 
-        {/* Membership upsell */}
-        {!isClub ? (
+        {/* Membership upsell — hidden while nothing can be bought. An
+            advertisement for a product with no purchase path is exactly
+            what App Review flags. */}
+        {MEMBERSHIPS_PURCHASABLE && !isClub ? (
           <View style={{ paddingHorizontal: 20, marginTop: 6 }}>
             <NCCard
               padded={false}

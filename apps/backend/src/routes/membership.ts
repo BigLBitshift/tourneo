@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate } from '../middleware/auth';
 import { AuditService } from '../services/auditService';
 import { db, t } from '../config/database';
+import { env } from '../config/environment';
 import { AppError } from '../middleware/errorHandler';
 
 const membershipRouter = Router();
@@ -187,10 +188,30 @@ membershipRouter.get('/tiers', async (_req: Request, res: Response) => {
 });
 
 // ============================================================
+/**
+ * Blocks every purchase path while version 1 ships without payments.
+ *
+ * The tier list and the entitlement checks stay reachable — a free user's
+ * membership is a real, queryable thing and the app still needs to render
+ * it — but nothing that would grant a paid tier can be reached. Before
+ * this, `subscribe` wrote a paid membership on an unverified receipt, so
+ * any authenticated user could hand themselves Club for nothing.
+ */
+function paymentsRequired(_req: Request, res: Response, next: NextFunction): void {
+  if (env.features.payments) return next();
+  res.status(503).json({
+    success: false,
+    error: {
+      code: 'PAYMENTS_UNAVAILABLE',
+      message: 'Mitgliedschaften sind in dieser Version noch nicht verfügbar.',
+    },
+  });
+}
+
 // 3. SUBSCRIBE / UPGRADE / DOWNGRADE
 // ============================================================
 
-membershipRouter.post('/subscribe', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+membershipRouter.post('/subscribe', authenticate, paymentsRequired, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.userId;
     const { receipt_data, product_id } = req.body;
@@ -300,7 +321,7 @@ membershipRouter.post('/subscribe', authenticate, async (req: Request, res: Resp
 // 4. CANCEL MEMBERSHIP
 // ============================================================
 
-membershipRouter.put('/cancel', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+membershipRouter.put('/cancel', authenticate, paymentsRequired, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.userId;
     const { reason, feedback } = req.body || {};
@@ -356,7 +377,7 @@ membershipRouter.put('/cancel', authenticate, async (req: Request, res: Response
 // 5. RESTORE CANCELLED MEMBERSHIP
 // ============================================================
 
-membershipRouter.put('/restore', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+membershipRouter.put('/restore', authenticate, paymentsRequired, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const userId = req.user!.userId;
     const now = new Date();

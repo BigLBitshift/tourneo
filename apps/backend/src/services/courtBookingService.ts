@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Knex } from 'knex';
 import { db, t } from '../config/database';
+import { env } from '../config/environment';
 import { AppError } from '../middleware/errorHandler';
 import { StripeConnectService } from './stripeConnectService';
 import { DEFAULT_TIMEZONE, slotStartInstant, toDateString } from '../utils/slotTime';
@@ -54,6 +55,7 @@ export class CourtBookingService {
       }
 
       const canPayInApp =
+        env.features.payments &&
         StripeConnectService.isConfigured() &&
         !!venue?.stripe_account_id &&
         (slot.price_cents ?? 0) > 0;

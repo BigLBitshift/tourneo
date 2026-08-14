@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { db, t } from '../config/database';
+import { env } from '../config/environment';
 import { AppError } from '../middleware/errorHandler';
 import { EventService } from './eventService';
 import { CreateRegistrationInput } from '../validators/registrations';
@@ -65,6 +66,12 @@ export class RegistrationService {
 
         waitlistPosition = (maxPos || 0) + 1;
         status = 'waitlisted';
+      } else if (!env.features.payments || netFee <= 0) {
+        // Free build (or a free event): there is nothing to pay, so the
+        // registration is final immediately. Leaving it in
+        // pending_payment would strand every participant behind a
+        // checkout that does not exist.
+        status = 'confirmed';
       } else {
         status = 'pending_payment';
       }

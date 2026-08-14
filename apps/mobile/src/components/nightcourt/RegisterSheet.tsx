@@ -1,12 +1,18 @@
 /**
  * 3-step registration flow:
  *   step 0  Type (Solo / Duo / Team)
- *   step 1  Payment summary + "Apple Pay" CTA
+ *   step 1  Confirmation
  *   step 2  Success splash
  *
- * Calls into `useRegistrationStore.registerForEvent` so it's wired to the
- * real backend.  Payment is mocked for now (the backend takes a separate
- * Stripe checkout flow already).
+ * Calls into `useRegistrationStore.registerForEvent`, which is wired to
+ * the real backend.
+ *
+ * Step 1 used to render a fabricated "Apple Pay •••• 4242" row with a
+ * green checkmark — a payment method that did not exist, attached to a
+ * charge that never happened. Fabricated payment UI is a guaranteed App
+ * Store rejection, and it misleads the user about what they just agreed
+ * to. While PAYMENTS_ENABLED is false the step confirms a free
+ * registration; the paid variant returns with StoreKit and live Stripe.
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Pressable, StyleSheet, Animated, Easing } from 'react-native';
@@ -17,6 +23,7 @@ import { NCButton } from './NCButton';
 import { NCBottomSheet } from './NCBottomSheet';
 import { NCIcon } from './NCIcon';
 import { useRegistrationStore } from '../../store/registrationStore';
+import { PAYMENTS_ENABLED } from '../../config/features';
 
 type Step = 0 | 1 | 2;
 type RegType = 'solo' | 'duo' | 'team';
@@ -197,29 +204,30 @@ const Step0: React.FC<{
   );
 };
 
-// ─── Step 1 — Pay ──────────────────────────────────────────
+// ─── Step 1 — Confirm ──────────────────────────────────────
 const Step1: React.FC<{ total: number; submitting: boolean; onSubmit: () => void }> = ({
   total,
   submitting,
   onSubmit,
 }) => {
+  const free = !PAYMENTS_ENABLED || total <= 0;
+
   return (
     <View>
-      <Text style={s.title}>Zahlung</Text>
-      <Text style={s.subtitle}>Stripe · SSL gesichert</Text>
-
-      <View style={s.payRow}>
-        <View style={s.payIcon} />
-        <View style={{ flex: 1 }}>
-          <Text style={s.payTitle}>Apple Pay</Text>
-          <Text style={s.payHint}>•••• 4242</Text>
-        </View>
-        <NCIcon name="check" size={18} color={NC.green} />
-      </View>
+      <Text style={s.title}>{free ? 'Anmeldung bestätigen' : 'Zahlung'}</Text>
+      <Text style={s.subtitle}>
+        {free
+          ? 'Die Teilnahme ist aktuell kostenlos.'
+          : 'Du wirst zur gesicherten Zahlungsseite weitergeleitet.'}
+      </Text>
 
       <View style={s.refundRow}>
         <NCIcon name="shield" size={14} color={NC.primaryLight} />
-        <Text style={s.refundText}>75% Rückerstattung bis 14 Tage vor Turnier</Text>
+        <Text style={s.refundText}>
+          {free
+            ? 'Du kannst deine Anmeldung jederzeit wieder stornieren.'
+            : '75% Rückerstattung bis 14 Tage vor Turnier'}
+        </Text>
       </View>
 
       <View style={{ marginTop: 16 }}>
@@ -232,7 +240,9 @@ const Step1: React.FC<{ total: number; submitting: boolean; onSubmit: () => void
         >
           {submitting
             ? 'Wird verarbeitet…'
-            : `${total.toLocaleString('de', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} € bezahlen`}
+            : free
+              ? 'Jetzt anmelden'
+              : `${total.toLocaleString('de', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} € bezahlen`}
         </NCButton>
       </View>
     </View>

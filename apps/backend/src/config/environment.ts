@@ -37,6 +37,25 @@ export const env = {
     refreshExpiry: process.env.JWT_REFRESH_EXPIRY || '30d',
   },
 
+  /**
+   * Feature switches.
+   *
+   * `payments` covers everything that moves money: tournament entry fees,
+   * in-app court payment, and the Plus/Club subscriptions. It is **off by
+   * default** so version 1 can ship to the App Store as a free app — no
+   * StoreKit, no Stripe activation, no Apple receipt verification, and
+   * none of the review surface those bring with them.
+   *
+   * Switched off, the app is fully usable: tournaments register for free,
+   * courts book as pay-at-venue, and every membership tier reports as
+   * unavailable rather than pretending to sell something. Nothing is
+   * deleted — set PAYMENTS_ENABLED=true once Stripe is live and StoreKit
+   * is implemented, and the paid paths come back.
+   */
+  features: {
+    payments: process.env.PAYMENTS_ENABLED === 'true',
+  },
+
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY || '',
     publishableKey: process.env.STRIPE_PUBLISHABLE_KEY || '',
@@ -115,8 +134,13 @@ export function validateEnv(): void {
 
   require('JWT_ACCESS_SECRET', process.env.JWT_ACCESS_SECRET || '', 32);
   require('JWT_REFRESH_SECRET', process.env.JWT_REFRESH_SECRET || '', 32);
-  require('STRIPE_SECRET_KEY', env.stripe.secretKey);
-  require('STRIPE_WEBHOOK_SECRET', env.stripe.webhookSecret);
+  // Stripe is only mandatory once money is actually being taken. Demanding
+  // live keys from a free build would force fake ones into production
+  // config, which is how a test key ends up charging real cards later.
+  if (env.features.payments) {
+    require('STRIPE_SECRET_KEY', env.stripe.secretKey);
+    require('STRIPE_WEBHOOK_SECRET', env.stripe.webhookSecret);
+  }
   require('APP_URL', process.env.APP_URL || '');
   require('ADMIN_URL', process.env.ADMIN_URL || '');
   require('DB_PASSWORD', env.db.password);

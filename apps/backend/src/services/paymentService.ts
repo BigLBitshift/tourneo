@@ -10,6 +10,12 @@ const stripe = env.stripe.secretKey
 
 export class PaymentService {
   static async createPaymentIntent(registrationId: number, userId: number, promoCode?: string) {
+    // Version 1 ships without payments (see env.features.payments).
+    // Registrations are already confirmed on creation, so nothing should
+    // reach this path — refuse loudly rather than half-start a checkout.
+    if (!env.features.payments) {
+      throw AppError.badRequest('Payments are not available in this version');
+    }
     if (!stripe) throw AppError.internal('Payment system not configured');
 
     const registration = await db(t('registrations'))

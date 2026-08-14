@@ -14,6 +14,7 @@ import {
   TButton, TCard, THeader, TInput, TChip, TDivider, TLoadingScreen,
 } from '../../../src/components/common';
 import { useEventStore } from '../../../src/store/eventStore';
+import { MEMBERSHIPS_PURCHASABLE } from '../../../src/config/features';
 import { useRegistrationStore } from '../../../src/store/registrationStore';
 import { useMembershipStore } from '../../../src/store/membershipStore';
 import { spacing, fontSize, fontWeight, radius } from '../../../src/theme/spacing';
@@ -242,7 +243,7 @@ export default function EventRegisterScreen() {
           </View>
         </TCard>
 
-        {discount === 0 && (
+        {MEMBERSHIPS_PURCHASABLE && discount === 0 && (
           <TCard variant="outlined" style={StyleSheet.flatten([styles.upsellCard, { borderColor: colors.membership.plus }])}>
             <Text style={[styles.upsellText, { color: colors.textSecondary }]}>
               💡 Mit Plus (7,99€/Mo) sparst du 10% auf Turniergebühren!
