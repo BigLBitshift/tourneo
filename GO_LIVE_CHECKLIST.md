@@ -196,7 +196,7 @@ Diese Punkte laufen parallel zur Entwicklung und sind der eigentliche kritische 
 ### Sprint 1 — Grundlagen (~2 Wochen)
 
 - [ ] Entscheidung: **Plus/Club in v1 oder nicht?** (Streichen entfernt B6–B9 komplett)
-- [ ] Deployment bauen: Dockerfile + Migrations-Runner + Deploy-Job (B33)
+- [x] ~~Dockerfile + Produktions-Migrations-Runner (`migrate:prod`) + Image-Build in CI~~ — offen: Registry, Deploy-Ziel, Secrets **[OWNER]**
 - [ ] Graceful Shutdown, echter `/health` mit DB-Ping, Prozess-Handler (B34, B35)
 - [ ] Sentry im Backend und in der App, Request-IDs, einheitliches Logging (B36)
 - [ ] `REDIS_URL` und SMTP in `validateEnv()` verpflichtend machen (B42, B43)

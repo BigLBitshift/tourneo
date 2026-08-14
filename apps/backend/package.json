@@ -15,7 +15,9 @@
     "lint": "eslint src/",
     "test": "jest --forceExit",
     "test:coverage": "jest --forceExit --coverage",
-    "test:verbose": "jest --forceExit --verbose"
+    "test:verbose": "jest --forceExit --verbose",
+    "migrate:prod": "knex migrate:latest --knexfile dist/config/knexfile.js",
+    "migrate:prod:rollback": "knex migrate:rollback --knexfile dist/config/knexfile.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

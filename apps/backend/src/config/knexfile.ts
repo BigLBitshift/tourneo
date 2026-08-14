@@ -50,7 +50,19 @@ const config: { [key: string]: Knex.Config } = {
     migrations: {
       directory: '../migrations',
       tableName: 'tourneo_knex_migrations',
-      extension: 'ts',
+      extension: 'js',
+      // In production this knexfile runs as compiled JavaScript from
+      // `dist/config/`, so `../migrations` resolves to `dist/migrations`.
+      // Pinning loadExtensions is load-bearing: `declaration: true` emits
+      // a `.d.ts` next to every migration, and knex's default extension
+      // list includes `.ts` — without this it would try to run every type
+      // declaration file as a migration.
+      loadExtensions: ['.js'],
+    },
+    seeds: {
+      directory: '../seeds',
+      extension: 'js',
+      loadExtensions: ['.js'],
     },
   },
 };
