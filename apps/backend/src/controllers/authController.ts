@@ -22,10 +22,18 @@ export class AuthController {
   }
 
   static async login(req: Request, res: Response, next: NextFunction) {
+    // `bruteForceProtection` attaches these; they are the counters that
+    // make the block actually engage. The middleware was fully written and
+    // unit-tested but mounted nowhere, so nothing ever counted a failure.
+    const trackFailedLogin = (req as any).trackFailedLogin as (() => void) | undefined;
+    const resetLoginAttempts = (req as any).resetLoginAttempts as (() => void) | undefined;
+
     try {
       const result = await AuthService.login(req.body);
+      resetLoginAttempts?.();
       res.json({ success: true, data: result });
     } catch (error) {
+      trackFailedLogin?.();
       next(error);
     }
   }

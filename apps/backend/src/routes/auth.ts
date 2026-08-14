@@ -4,6 +4,7 @@ import { AuthController } from '../controllers/authController';
 import { authenticate } from '../middleware/auth';
 import { validateBody } from '../middleware/validate';
 import { authLimiter } from '../middleware/rateLimiter';
+import { bruteForceProtection } from '../middleware/security';
 import {
   registerSchema,
   loginSchema,
@@ -23,7 +24,16 @@ const resetPasswordSchema = z.object({
 });
 
 router.post('/register', authLimiter, validateBody(registerSchema), AuthController.register);
-router.post('/login', authLimiter, validateBody(loginSchema), AuthController.login);
+// authLimiter caps request volume; bruteForceProtection blocks an IP that
+// keeps guessing. The two are complementary — the rate limiter alone lets
+// a patient attacker grind five guesses a minute indefinitely.
+router.post(
+  '/login',
+  authLimiter,
+  bruteForceProtection(),
+  validateBody(loginSchema),
+  AuthController.login
+);
 router.post('/apple', authLimiter, validateBody(appleSignInSchema), AuthController.appleSignIn);
 router.post('/refresh', authLimiter, validateBody(refreshTokenSchema), AuthController.refresh);
 router.post('/logout', authenticate, AuthController.logout);
@@ -41,6 +51,7 @@ router.post(
 router.post(
   '/forgot-password',
   authLimiter,
+  bruteForceProtection(),
   validateBody(emailOnlySchema),
   AuthController.forgotPassword
 );

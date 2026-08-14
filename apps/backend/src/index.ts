@@ -6,10 +6,11 @@ import compression from 'compression';
 import * as path from 'path';
 import { createServer } from 'http';
 import { env, validateEnv } from './config/environment';
-import { testConnection } from './config/database';
+import { db, testConnection } from './config/database';
 import { apiRouter } from './routes';
-import { startJobs } from './jobs';
+import { startJobs, stopJobs } from './jobs';
 import { initLiveBracket } from './realtime/liveBracket';
+import { closeHub } from './realtime/hub';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter } from './middleware/rateLimiter';
 import {
@@ -111,6 +112,73 @@ app.get('/', (_req, res) => {
 app.use(notFoundHandler);
 app.use(errorHandler);
 
+/**
+ * Graceful shutdown.
+ *
+ * Without this every deploy severs in-flight requests mid-response and
+ * drops every live WebSocket without a close frame, so clients reconnect
+ * blind instead of backing off. The sequence matters: stop accepting new
+ * connections, then close sockets and jobs, then release the DB pool —
+ * closing the pool first would fail the requests we are trying to let
+ * finish.
+ *
+ * The timeout is the backstop: a hung request must not keep a replaced
+ * container alive forever.
+ */
+const SHUTDOWN_TIMEOUT_MS = 15_000;
+let shuttingDown = false;
+
+function registerShutdownHandlers(httpServer: import('http').Server): void {
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n[shutdown] ${signal} received — draining…`);
+
+    const forceExit = setTimeout(() => {
+      console.error('[shutdown] timed out — forcing exit');
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceExit.unref();
+
+    try {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      console.log('[shutdown] http server closed');
+
+      await closeHub();
+      console.log('[shutdown] realtime hub closed');
+
+      await stopJobs();
+      console.log('[shutdown] background jobs stopped');
+
+      await db.destroy();
+      console.log('[shutdown] database pool drained');
+
+      clearTimeout(forceExit);
+      process.exit(0);
+    } catch (err) {
+      console.error('[shutdown] failed:', err);
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  // A rejected promise nobody handled used to leave the process running in
+  // an unknown state, silently. Log it loudly; do not exit, because a
+  // single bad request must not take down the instance.
+  process.on('unhandledRejection', (reason) => {
+    console.error('[fatal] unhandled promise rejection:', reason);
+  });
+
+  // An uncaught exception genuinely does leave the process unsound, so we
+  // drain and let the supervisor restart us.
+  process.on('uncaughtException', (err) => {
+    console.error('[fatal] uncaught exception:', err);
+    void shutdown('uncaughtException');
+  });
+}
+
 // Start server
 async function start() {
   // Fail-fast on misconfigured production deploys (e.g. missing JWT
@@ -137,6 +205,7 @@ async function start() {
   // listen on the same port (/ws is upgraded, everything else is HTTP).
   const httpServer = createServer(app);
   initLiveBracket(httpServer);
+  registerShutdownHandlers(httpServer);
 
   httpServer.listen(env.port, () => {
     console.log(`

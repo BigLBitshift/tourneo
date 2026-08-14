@@ -1,5 +1,6 @@
 import knex, { Knex } from 'knex';
 import { env } from './environment';
+import { buildSslOptions } from './dbSsl';
 
 const knexConfig: Knex.Config = {
   client: 'mysql2',
@@ -11,7 +12,7 @@ const knexConfig: Knex.Config = {
     password: env.db.password,
     charset: 'utf8mb4',
     timezone: '+00:00',
-    ...(env.db.ssl ? { ssl: { rejectUnauthorized: false } } : {}),
+    ...(env.db.ssl ? { ssl: buildSslOptions() } : {}),
   },
   pool: {
     min: env.db.poolMin,

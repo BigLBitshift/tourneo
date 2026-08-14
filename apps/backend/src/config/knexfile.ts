@@ -1,4 +1,5 @@
 import { env } from './environment';
+import { buildSslOptions } from './dbSsl';
 import type { Knex } from 'knex';
 
 const config: { [key: string]: Knex.Config } = {
@@ -37,7 +38,10 @@ const config: { [key: string]: Knex.Config } = {
       password: env.db.password,
       charset: 'utf8mb4',
       timezone: '+00:00',
-      ssl: { rejectUnauthorized: false },
+      // Same verified-TLS policy as the runtime pool; see
+      // config/database.ts. Migrations run with the same credentials
+      // against the same server and must not be the weaker path in.
+      ssl: buildSslOptions(),
     },
     pool: {
       min: env.db.poolMin,
