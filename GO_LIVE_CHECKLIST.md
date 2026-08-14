@@ -54,6 +54,13 @@ Trotzdem ist die App **heute nicht einreichbar und nicht startbar**. Der Grund i
 | B3 | **Sign in with Apple hätte in Produktion nie funktioniert** — Backend-Audience `com.turneo.app`, App liefert `de.tourneo.app` aus. | Default + `.env.example` auf `de.tourneo.app` |
 | B4 | **App hieß im Store „Turneo"** (Tippfehler im Anzeigenamen). | `app.json` → „Tourneo", ebenso `APP_NAME`/`SMTP_FROM_NAME` |
 | B5 | Altersprüfung rechnete mit `365.25`-Näherung — an Geburtstagsrändern falsch. | kalendergenaue `ageInYears()` |
+| B11 | **Kein Melden, kein Blockieren, keine Moderation** (Guideline 1.2 + DSA). | Migration 020 + `moderationService.ts`: Melden auf Chat, Reviews, Fotos, Profilen; symmetrisches Blockieren, das Chat **und** Feed filtert; Moderations-Queue mit 24-h-Ziel; Mobile: Longpress im Chat, Menü auf dem Profil, Verwaltung blockierter Nutzer in den Einstellungen |
+| B34 | Kein Graceful Shutdown, keine Prozess-Handler. | Geordnetes Draining mit 15-s-Backstop, `unhandledRejection`, `uncaughtException` |
+| B35 | `/health` war ein Literal und fasste die DB nie an. | `/health` = echte Liveness, neu `/ready` mit DB-Query und 503 |
+| B38 | Brute-Force-Schutz auf null Routen gemountet. | Auf `/login` und `/forgot-password` gemountet, Controller zählt Fehlversuche |
+| B39 | DB-TLS akzeptierte jedes Zertifikat. | Verifikation standardmäßig an, `DB_SSL_CA`, Escape-Hatch in Produktion gesperrt |
+| B45 | Support-Screen aus der App nicht erreichbar. | Aus den Einstellungen verlinkt |
+| — | `DB_TABLE_PREFIX=turneo_` hätte die Fehlschreibung in jeden Tabellennamen gebacken. | korrigiert |
 
 ### 2.2 Offen — Monetarisierung (der größte Block)
 
@@ -156,7 +163,18 @@ Trotzdem ist die App **heute nicht einreichbar und nicht startbar**. Der Grund i
 - **Kein Unique-Constraint auf `court_availability`** — ein erneuter Lauf der Slot-Generierung dupliziert jeden Slot. Zwei Zeilen für einen physischen Court bedeuten später zwei unabhängige Warteschlangen, zwei Holds, zwei Buchungen.
 - **Zeitzonen sind falsch.** Slot-Zeiten sind naiv, die DB-Verbindung ist auf UTC festgenagelt — in CEST ist jeder Claim-Countdown zwei Stunden daneben.
 
-**Der vollständige Bauplan steht in [`docs/LIVE_COURT_QUEUE.md`](docs/LIVE_COURT_QUEUE.md).** Kern: Phase 0 (Datenintegrität + Zeitzonen, ~1 Woche) → Phase 1 (die Warteschlange selbst, ~3 Wochen) → Phase 2 (venue-übergreifende Suche, ~2 Wochen).
+### Was inzwischen gebaut ist
+
+**Phase 0 und Phase 1 sind implementiert.** Der vollständige Entwurf steht in [`docs/LIVE_COURT_QUEUE.md`](docs/LIVE_COURT_QUEUE.md).
+
+- **Migration 018** — `venues.timezone`, absolute Zeitstempel (`starts_at_utc`), `source`/`confidence`, Dedupe plus Unique-Key über eine generierte Spalte, `held`-Status und Hold-Spalten. `utils/slotTime.ts` rechnet über die Venue-Zeitzone und behandelt beide Sommerzeit-Grenzen explizit.
+- **Migration 019** — `slot_waitlist`, `slot_offers`, `notification_prefs`. Zwei Invarianten stehen im Schema statt im Code: ein aktiver Eintrag pro Nutzer und Slot, ein offenes Angebot pro Slot.
+- **`slotQueueService.ts`** — die Slot-Zeile ist der Mutex für die ganze Warteschlange; ein frei werdender Platz geht **innerhalb** der stornierenden Transaktion direkt auf `held`. Alle drei Freigabepfade (Stornierung, Zahlungsausfall, 15-Min-Ablauf) hängen daran.
+- **`realtime/hub.ts`** — topic-basiert (`venue:`, `slot:`, `city:`, `user:`, `event:`) mit JWT-Auth, Sequenznummern, Reconnect-Backfill und optionalem Redis-Fan-out.
+- **`slotNotifier.ts`** — Push mit Ruhezeiten und Dedupe. iOS hat keinen Hintergrund-Socket, deshalb: Vordergrund = Socket, Hintergrund = Push.
+- **Mobile** — `RealtimeProvider`, Live-Availability-Screen mit Warteschlangen-Sheet, Claim-Screen mit servergestütztem Countdown, Warteschlangen-Sektion in den Buchungen, Push-Deeplink inklusive Cold-Start, und der neue Screen `app/courts/index.tsx`, dessen Fehlen die ganze Platz-Säule unerreichbar machte.
+
+**Offen bleibt:** die Datenquelle. Slots müssen weiterhin per API eingetragen werden — das Admin-Dashboard hat dafür kein Formular. Phase 2 (venue-übergreifende Suche, iCal-Import) und Phase 3 (Club-Portal, Platz-Alerts) sind nicht gebaut.
 
 ---
 

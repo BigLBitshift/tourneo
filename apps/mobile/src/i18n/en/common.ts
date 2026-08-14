@@ -250,6 +250,8 @@ export default {
     lastUpdated: 'As of: {{date}}, Version {{version}}', version: 'Version',
   },
   settings: {
+    blockedUsers: 'Blocked users',
+    support: 'Help & support',
     title: 'Settings',
     profile: 'Profile',
     displayName: 'Display Name',

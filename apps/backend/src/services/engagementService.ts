@@ -1,4 +1,5 @@
 import { db, t } from '../config/database';
+import { ModerationService } from './moderationService';
 import { isoWeek } from './streakService';
 
 /**
@@ -87,6 +88,10 @@ export class EngagementService {
   static async getFeed(userId: number, now: Date = new Date()) {
     const since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
+    // A blocked user must not reappear in the feed via a shared
+    // friendship — blocking that only covers chat is not blocking.
+    const hiddenUserIds = new Set(await ModerationService.hiddenUserIds(userId));
+
     const friendIds: number[] = (
       await db(t('friendships'))
         .where('status', 'accepted')
@@ -94,7 +99,9 @@ export class EngagementService {
           q.where('requester_id', userId).orWhere('addressee_id', userId);
         })
         .select('requester_id', 'addressee_id')
-    ).flatMap((f: any) => [f.requester_id, f.addressee_id].filter((id: number) => id !== userId));
+    )
+      .flatMap((f: any) => [f.requester_id, f.addressee_id].filter((id: number) => id !== userId))
+      .filter((id: number) => !hiddenUserIds.has(id));
 
     const items: Array<{ type: string; ts: string; payload: Record<string, unknown> }> = [];
 

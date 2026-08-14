@@ -1,6 +1,7 @@
 import { db, t } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { NotificationService } from './notificationService';
+import { ModerationService } from './moderationService';
 
 export interface ChatMessageRow {
   id: number;
@@ -57,9 +58,19 @@ export class ChatService {
     await this.assertParticipant(eventId, userId);
     const room = await this.getOrCreateRoom(eventId);
 
+    // Blocked users disappear from the conversation, and moderator-hidden
+    // messages disappear for everyone. Both filters belong here rather
+    // than in the client: a message the reader must not see should never
+    // leave the server.
+    const hiddenUserIds = await ModerationService.hiddenUserIds(userId);
+
     const rows = await db(t('chat_messages') + ' as m')
       .leftJoin(t('profiles') + ' as p', 'm.user_id', 'p.user_id')
       .where('m.room_id', room.id)
+      .whereNull('m.hidden_at')
+      .modify((q) => {
+        if (hiddenUserIds.length) q.whereNotIn('m.user_id', hiddenUserIds);
+      })
       .orderBy('m.created_at', 'desc')
       .limit(50)
       .select(

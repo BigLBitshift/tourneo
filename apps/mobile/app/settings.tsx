@@ -363,6 +363,19 @@ export default function SettingsScreen() {
             leftIcon={<Ionicons name="information-circle-outline" size={20} color={colors.textSecondary as string} />}
             onPress={() => router.push('/legal/impressum')}
           />
+          {/* A block the user cannot undo is a trap rather than a control,
+              and App Store review looks for this path specifically. */}
+          <TListItem
+            title={t('settings.blockedUsers')}
+            leftIcon={<Ionicons name="ban-outline" size={20} color={colors.textSecondary as string} />}
+            onPress={() => router.push('/blocked-users')}
+          />
+          {/* The support screen existed but was unreachable from the app. */}
+          <TListItem
+            title={t('settings.support')}
+            leftIcon={<Ionicons name="help-buoy-outline" size={20} color={colors.textSecondary as string} />}
+            onPress={() => router.push('/support')}
+          />
         </TCard>
 
         {/* ── Account Actions ─────────────────────────────────── */}

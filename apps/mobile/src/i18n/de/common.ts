@@ -473,6 +473,8 @@ export default {
     version: 'Version',
   },
   settings: {
+    blockedUsers: 'Blockierte Nutzer',
+    support: 'Hilfe & Support',
     title: 'Einstellungen',
     profile: 'Profil',
     displayName: 'Anzeigename',

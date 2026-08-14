@@ -774,3 +774,54 @@ export async function getMyQueue(): Promise<{
   const res = await apiClient.get('/me/waitlist');
   return res.data.data;
 }
+
+// ─── Moderation ──────────────────────────────────────────
+/**
+ * Reporting and blocking. Required by App Store Guideline 1.2 for any app
+ * carrying user-generated content, and by the DSA as a notice-and-action
+ * procedure.
+ */
+export type ReportContentType =
+  | 'chat_message'
+  | 'venue_review'
+  | 'venue_photo'
+  | 'profile'
+  | 'feed_item';
+
+export type ReportReason =
+  | 'spam'
+  | 'harassment'
+  | 'hate_speech'
+  | 'sexual'
+  | 'violence'
+  | 'other';
+
+export async function reportContent(params: {
+  contentType: ReportContentType;
+  contentId: number;
+  reason: ReportReason;
+  details?: string;
+}): Promise<{ id: number; status: string }> {
+  const res = await apiClient.post('/reports', {
+    content_type: params.contentType,
+    content_id: params.contentId,
+    reason: params.reason,
+    details: params.details,
+  });
+  return res.data.data;
+}
+
+export async function blockUser(userId: number): Promise<void> {
+  await apiClient.post(`/users/${userId}/block`);
+}
+
+export async function unblockUser(userId: number): Promise<void> {
+  await apiClient.delete(`/users/${userId}/block`);
+}
+
+export async function listBlockedUsers(): Promise<
+  Array<{ user_id: number; display_name: string | null; avatar_url: string | null; created_at: string }>
+> {
+  const res = await apiClient.get('/me/blocks');
+  return res.data.data;
+}
