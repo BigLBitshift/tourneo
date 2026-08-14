@@ -43,6 +43,7 @@ router.use('/profiles', profilesRouter); // /profiles/:id, /profiles/:id/head-to
 router.use('/membership', require('./membership').membershipRouter);
 router.use('/hall-of-fame', require('./hallOfFame').hallOfFameRouter);
 router.use('/bookings', bookingRouter); // court booking
+router.use('/slots', require('./slots').slotRouter); // live court queue
 router.use('/leaderboard', leaderboardRouter); // city/global rankings
 router.use('/', americanoRouter); // /events/:id/americano + /americano/matches/:id/score
 router.use('/', require('./playNow').playNowRouter); // /play-now + /challenges

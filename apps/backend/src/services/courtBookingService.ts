@@ -1,8 +1,15 @@
 import { v4 as uuidv4 } from 'uuid';
+import type { Knex } from 'knex';
 import { db, t } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { StripeConnectService } from './stripeConnectService';
 import { DEFAULT_TIMEZONE, slotStartInstant, toDateString } from '../utils/slotTime';
+import {
+  emitOffer,
+  emitSlotAvailable,
+  SlotQueueService,
+  type OfferResult,
+} from './slotQueueService';
 
 const CANCELLATION_CUTOFF_HOURS = 2;
 const UNPAID_BOOKING_TTL_MINUTES = 15;
@@ -162,23 +169,22 @@ export class CourtBookingService {
    */
   static async failPaidBooking(paymentIntentId: string): Promise<void> {
     const now = new Date();
-    await db.transaction(async (trx) => {
+    const released = await db.transaction(async (trx) => {
       const booking = await trx(t('court_bookings'))
         .where('stripe_payment_intent_id', paymentIntentId)
         .forUpdate()
         .first();
-      if (!booking || booking.status !== 'pending_payment') return;
+      if (!booking || booking.status !== 'pending_payment') return null;
 
       await trx(t('court_bookings')).where('id', booking.id).update({
         status: 'cancelled',
         cancelled_at: now,
         updated_at: now,
       });
-      await trx(t('court_availability'))
-        .where('id', booking.slot_id)
-        .where('status', 'booked')
-        .update({ status: 'available', updated_at: now });
+      return releaseSlotToQueue(trx, booking.slot_id, now);
     });
+
+    announceRelease(released);
   }
 
   /**
@@ -194,23 +200,22 @@ export class CourtBookingService {
 
     let expired = 0;
     for (const row of stale) {
-      await db.transaction(async (trx) => {
+      const released = await db.transaction(async (trx) => {
         const booking = await trx(t('court_bookings'))
           .where('id', row.id)
           .forUpdate()
           .first();
-        if (!booking || booking.status !== 'pending_payment') return;
+        if (!booking || booking.status !== 'pending_payment') return null;
         await trx(t('court_bookings')).where('id', row.id).update({
           status: 'cancelled',
           cancelled_at: now,
           updated_at: now,
         });
-        await trx(t('court_availability'))
-          .where('id', row.slot_id)
-          .where('status', 'booked')
-          .update({ status: 'available', updated_at: now });
         expired++;
+        return releaseSlotToQueue(trx, row.slot_id, now);
       });
+
+      announceRelease(released);
     }
     return expired;
   }
@@ -218,7 +223,7 @@ export class CourtBookingService {
   static async cancelBooking(bookingId: number, userId: number, isAdmin = false) {
     const now = new Date();
 
-    await db.transaction(async (trx) => {
+    const released = await db.transaction(async (trx) => {
       const booking = await trx(t('court_bookings'))
         .where('id', bookingId)
         .forUpdate()
@@ -268,14 +273,14 @@ export class CourtBookingService {
         updated_at: now,
       });
 
-      // Free the slot again so others can book it.
+      // Free the slot again — straight to the queue if anyone is waiting.
       if (slot && slot.status === 'booked') {
-        await trx(t('court_availability')).where('id', slot.id).update({
-          status: 'available',
-          updated_at: now,
-        });
+        return releaseSlotToQueue(trx, slot.id, now);
       }
+      return null;
     });
+
+    announceRelease(released);
 
     return { id: bookingId, status: 'cancelled' as const };
   }
@@ -320,6 +325,49 @@ export class CourtBookingService {
         `${t('venues')}.address_city as venue_city`,
         `${t('courts')}.name as court_name`
       );
+  }
+}
+
+/**
+ * Result of freeing a slot: either it went to the next person in the
+ * queue, or nobody was waiting and it is ordinarily bookable again.
+ *
+ * The distinction matters because the realtime frame differs, and because
+ * both must be published only after the caller's transaction commits.
+ */
+type SlotRelease =
+  | { kind: 'offered'; offer: OfferResult }
+  | { kind: 'available'; slotId: number; venueId: number; slot: any };
+
+/**
+ * Hands a freed slot to the queue, inside the caller's transaction.
+ *
+ * Critically this never passes through `available`: `onSlotFreed` moves
+ * the row straight from `booked` to `held` under the slot lock. Releasing
+ * first and offering afterwards would let a pull-to-refresh beat the
+ * queue, which makes the queue a lie the first time it happens.
+ */
+async function releaseSlotToQueue(
+  trx: Knex.Transaction,
+  slotId: number,
+  now: Date
+): Promise<SlotRelease | null> {
+  const offer = await SlotQueueService.onSlotFreed(trx, slotId, now);
+  if (offer) return { kind: 'offered', offer };
+
+  const slot = await trx(t('court_availability')).where('id', slotId).first();
+  if (!slot) return null;
+  return { kind: 'available', slotId, venueId: slot.venue_id, slot };
+}
+
+/** Publishes the realtime frame for a release. Never throws into the caller. */
+function announceRelease(released: SlotRelease | null): void {
+  if (!released) return;
+  try {
+    if (released.kind === 'offered') emitOffer(released.offer);
+    else emitSlotAvailable(released.slotId, released.venueId, released.slot);
+  } catch (err) {
+    console.error('[bookings] realtime publish failed:', err);
   }
 }
 
