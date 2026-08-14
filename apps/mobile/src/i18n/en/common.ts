@@ -66,6 +66,7 @@ export default {
     dobFormat: 'Format: DD.MM.YYYY',
     dobAge18: 'You must be at least 18 years old',
     dobAge18Hint: 'You must be at least 18 years old',
+    legalUnavailable: 'Terms and privacy policy could not be loaded. Please check your connection and try again.',
     termsRequired: 'Terms must be accepted',
     privacyRequired: 'Privacy policy must be accepted',
     ageRequired: 'Age confirmation required',

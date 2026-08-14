@@ -162,7 +162,7 @@ export default function SettingsScreen() {
                   style: 'destructive',
                   onPress: async () => {
                     try {
-                      await api.delete('/users/account');
+                      await api.post('/me/delete-account');
                       await logout();
                       router.replace('/(auth)/onboarding');
                     } catch {

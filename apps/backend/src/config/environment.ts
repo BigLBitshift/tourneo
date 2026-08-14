@@ -46,7 +46,7 @@ export const env = {
 
   apple: {
     sharedSecret: process.env.APPLE_SHARED_SECRET || '',
-    bundleId: process.env.APPLE_BUNDLE_ID || 'com.tourneo.app',
+    bundleId: process.env.APPLE_BUNDLE_ID || 'de.tourneo.app',
     iapEnvironment: process.env.APPLE_IAP_ENVIRONMENT || 'sandbox',
   },
 
