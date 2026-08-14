@@ -11,6 +11,7 @@
     "migrate:make": "knex migrate:make --knexfile src/config/knexfile.ts",
     "migrate:rollback": "knex migrate:rollback --knexfile src/config/knexfile.ts",
     "seed": "knex seed:run --knexfile src/config/knexfile.ts",
+    "backfill:slots": "tsx src/scripts/backfillSlotInstants.ts",
     "lint": "eslint src/",
     "test": "jest --forceExit",
     "test:coverage": "jest --forceExit --coverage",

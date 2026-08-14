@@ -13,8 +13,12 @@ export async function sendBookingReminders(now: Date = new Date()): Promise<numb
   const windowStart = new Date(now.getTime() + 105 * 60 * 1000);
   const windowEnd = new Date(now.getTime() + 135 * 60 * 1000);
 
-  // slot_date + slot_start live in separate columns; compare on the
-  // combined timestamp so bookings around midnight resolve correctly.
+  // Compare on the slot's absolute instant. `TIMESTAMP(slot_date,
+  // slot_start)` builds the club's wall clock, which the UTC-pinned
+  // connection then compares against a UTC window — two hours off in CEST,
+  // so reminders fired at the wrong time or not at all. COALESCE keeps
+  // rows the backfill has not reached on the old behaviour rather than
+  // dropping them entirely.
   const bookings = await db(t('court_bookings'))
     .join(t('court_availability'), `${t('court_bookings')}.slot_id`, `${t('court_availability')}.id`)
     .leftJoin(t('venues'), `${t('court_bookings')}.venue_id`, `${t('venues')}.id`)
@@ -22,7 +26,9 @@ export async function sendBookingReminders(now: Date = new Date()): Promise<numb
     .where(`${t('court_bookings')}.status`, 'confirmed')
     .whereNull(`${t('court_bookings')}.reminder_sent_at`)
     .whereRaw(
-      `TIMESTAMP(${t('court_availability')}.slot_date, ${t('court_availability')}.slot_start) BETWEEN ? AND ?`,
+      `COALESCE(${t('court_availability')}.starts_at_utc,
+                TIMESTAMP(${t('court_availability')}.slot_date, ${t('court_availability')}.slot_start))
+       BETWEEN ? AND ?`,
       [windowStart, windowEnd]
     )
     .select(

@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { db, t } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { StripeConnectService } from './stripeConnectService';
+import { DEFAULT_TIMEZONE, slotStartInstant, toDateString } from '../utils/slotTime';
 
 const CANCELLATION_CUTOFF_HOURS = 2;
 const UNPAID_BOOKING_TTL_MINUTES = 15;
@@ -38,12 +39,13 @@ export class CourtBookingService {
         throw AppError.conflict('This slot is no longer available');
       }
 
-      const slotStart = combineDateTime(slot.slot_date, slot.slot_start);
+      const venue = await trx(t('venues')).where('id', slot.venue_id).first();
+
+      const slotStart = slotStartInstant(slot, venue?.timezone ?? DEFAULT_TIMEZONE);
       if (slotStart <= now) {
         throw AppError.badRequest('This slot is in the past');
       }
 
-      const venue = await trx(t('venues')).where('id', slot.venue_id).first();
       const canPayInApp =
         StripeConnectService.isConfigured() &&
         !!venue?.stripe_account_id &&
@@ -248,7 +250,8 @@ export class CourtBookingService {
           ? 30 * 60 * 1000
           : CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000;
 
-        const slotStart = combineDateTime(slot.slot_date, slot.slot_start);
+        const venue = await trx(t('venues')).where('id', slot.venue_id).first();
+        const slotStart = slotStartInstant(slot, venue?.timezone ?? DEFAULT_TIMEZONE);
         const cutoff = new Date(slotStart.getTime() - cutoffMs);
         if (now > cutoff) {
           throw AppError.badRequest(
@@ -320,15 +323,16 @@ export class CourtBookingService {
   }
 }
 
-function combineDateTime(slotDate: string | Date, slotTime: string): Date {
-  const dateStr =
-    slotDate instanceof Date ? slotDate.toISOString().slice(0, 10) : String(slotDate).slice(0, 10);
-  return new Date(`${dateStr}T${slotTime}`);
-}
-
 function formatDate(slotDate: string | Date): string {
-  const d = slotDate instanceof Date ? slotDate : new Date(slotDate);
-  return d.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
+  // Formatted from the calendar day itself, not from an instant — the
+  // club's Saturday must not become Friday for a reader east of UTC.
+  const [y, m, d] = toDateString(slotDate).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('de-DE', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
 }
 
 function formatTime(slotTime: string): string {
