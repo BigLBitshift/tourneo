@@ -1,7 +1,15 @@
 import { v4 as uuidv4 } from 'uuid';
+import type { Knex } from 'knex';
 import { db, t } from '../config/database';
 import { AppError } from '../middleware/errorHandler';
 import { StripeConnectService } from './stripeConnectService';
+import { DEFAULT_TIMEZONE, slotStartInstant, toDateString } from '../utils/slotTime';
+import {
+  emitOffer,
+  emitSlotAvailable,
+  SlotQueueService,
+  type OfferResult,
+} from './slotQueueService';
 
 const CANCELLATION_CUTOFF_HOURS = 2;
 const UNPAID_BOOKING_TTL_MINUTES = 15;
@@ -38,12 +46,13 @@ export class CourtBookingService {
         throw AppError.conflict('This slot is no longer available');
       }
 
-      const slotStart = combineDateTime(slot.slot_date, slot.slot_start);
+      const venue = await trx(t('venues')).where('id', slot.venue_id).first();
+
+      const slotStart = slotStartInstant(slot, venue?.timezone ?? DEFAULT_TIMEZONE);
       if (slotStart <= now) {
         throw AppError.badRequest('This slot is in the past');
       }
 
-      const venue = await trx(t('venues')).where('id', slot.venue_id).first();
       const canPayInApp =
         StripeConnectService.isConfigured() &&
         !!venue?.stripe_account_id &&
@@ -92,7 +101,7 @@ export class CourtBookingService {
 
     // Stripe call happens OUTSIDE the transaction — network calls inside
     // a DB transaction would hold the slot lock for the whole roundtrip.
-    let clientSecret: string | null = null;
+    let checkoutUrl: string | null = null;
     if (result.canPayInApp && result.amountCents) {
       try {
         const intent = await StripeConnectService.createBookingPaymentIntent({
@@ -104,7 +113,7 @@ export class CourtBookingService {
           userId,
         });
         if (intent) {
-          clientSecret = intent.client_secret;
+          checkoutUrl = intent.checkout_url;
           await db(t('court_bookings')).where('id', result.bookingId).update({
             stripe_payment_intent_id: intent.payment_intent_id,
             updated_at: new Date(),
@@ -123,7 +132,7 @@ export class CourtBookingService {
     }
 
     const booking = await this.getBookingById(result.bookingId, userId);
-    return { ...booking, client_secret: clientSecret };
+    return { ...booking, checkout_url: checkoutUrl };
   }
 
   /**
@@ -160,23 +169,22 @@ export class CourtBookingService {
    */
   static async failPaidBooking(paymentIntentId: string): Promise<void> {
     const now = new Date();
-    await db.transaction(async (trx) => {
+    const released = await db.transaction(async (trx) => {
       const booking = await trx(t('court_bookings'))
         .where('stripe_payment_intent_id', paymentIntentId)
         .forUpdate()
         .first();
-      if (!booking || booking.status !== 'pending_payment') return;
+      if (!booking || booking.status !== 'pending_payment') return null;
 
       await trx(t('court_bookings')).where('id', booking.id).update({
         status: 'cancelled',
         cancelled_at: now,
         updated_at: now,
       });
-      await trx(t('court_availability'))
-        .where('id', booking.slot_id)
-        .where('status', 'booked')
-        .update({ status: 'available', updated_at: now });
+      return releaseSlotToQueue(trx, booking.slot_id, now);
     });
+
+    announceRelease(released);
   }
 
   /**
@@ -192,23 +200,22 @@ export class CourtBookingService {
 
     let expired = 0;
     for (const row of stale) {
-      await db.transaction(async (trx) => {
+      const released = await db.transaction(async (trx) => {
         const booking = await trx(t('court_bookings'))
           .where('id', row.id)
           .forUpdate()
           .first();
-        if (!booking || booking.status !== 'pending_payment') return;
+        if (!booking || booking.status !== 'pending_payment') return null;
         await trx(t('court_bookings')).where('id', row.id).update({
           status: 'cancelled',
           cancelled_at: now,
           updated_at: now,
         });
-        await trx(t('court_availability'))
-          .where('id', row.slot_id)
-          .where('status', 'booked')
-          .update({ status: 'available', updated_at: now });
         expired++;
+        return releaseSlotToQueue(trx, row.slot_id, now);
       });
+
+      announceRelease(released);
     }
     return expired;
   }
@@ -216,7 +223,7 @@ export class CourtBookingService {
   static async cancelBooking(bookingId: number, userId: number, isAdmin = false) {
     const now = new Date();
 
-    await db.transaction(async (trx) => {
+    const released = await db.transaction(async (trx) => {
       const booking = await trx(t('court_bookings'))
         .where('id', bookingId)
         .forUpdate()
@@ -248,7 +255,8 @@ export class CourtBookingService {
           ? 30 * 60 * 1000
           : CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000;
 
-        const slotStart = combineDateTime(slot.slot_date, slot.slot_start);
+        const venue = await trx(t('venues')).where('id', slot.venue_id).first();
+        const slotStart = slotStartInstant(slot, venue?.timezone ?? DEFAULT_TIMEZONE);
         const cutoff = new Date(slotStart.getTime() - cutoffMs);
         if (now > cutoff) {
           throw AppError.badRequest(
@@ -265,14 +273,14 @@ export class CourtBookingService {
         updated_at: now,
       });
 
-      // Free the slot again so others can book it.
+      // Free the slot again — straight to the queue if anyone is waiting.
       if (slot && slot.status === 'booked') {
-        await trx(t('court_availability')).where('id', slot.id).update({
-          status: 'available',
-          updated_at: now,
-        });
+        return releaseSlotToQueue(trx, slot.id, now);
       }
+      return null;
     });
+
+    announceRelease(released);
 
     return { id: bookingId, status: 'cancelled' as const };
   }
@@ -320,15 +328,59 @@ export class CourtBookingService {
   }
 }
 
-function combineDateTime(slotDate: string | Date, slotTime: string): Date {
-  const dateStr =
-    slotDate instanceof Date ? slotDate.toISOString().slice(0, 10) : String(slotDate).slice(0, 10);
-  return new Date(`${dateStr}T${slotTime}`);
+/**
+ * Result of freeing a slot: either it went to the next person in the
+ * queue, or nobody was waiting and it is ordinarily bookable again.
+ *
+ * The distinction matters because the realtime frame differs, and because
+ * both must be published only after the caller's transaction commits.
+ */
+type SlotRelease =
+  | { kind: 'offered'; offer: OfferResult }
+  | { kind: 'available'; slotId: number; venueId: number; slot: any };
+
+/**
+ * Hands a freed slot to the queue, inside the caller's transaction.
+ *
+ * Critically this never passes through `available`: `onSlotFreed` moves
+ * the row straight from `booked` to `held` under the slot lock. Releasing
+ * first and offering afterwards would let a pull-to-refresh beat the
+ * queue, which makes the queue a lie the first time it happens.
+ */
+async function releaseSlotToQueue(
+  trx: Knex.Transaction,
+  slotId: number,
+  now: Date
+): Promise<SlotRelease | null> {
+  const offer = await SlotQueueService.onSlotFreed(trx, slotId, now);
+  if (offer) return { kind: 'offered', offer };
+
+  const slot = await trx(t('court_availability')).where('id', slotId).first();
+  if (!slot) return null;
+  return { kind: 'available', slotId, venueId: slot.venue_id, slot };
+}
+
+/** Publishes the realtime frame for a release. Never throws into the caller. */
+function announceRelease(released: SlotRelease | null): void {
+  if (!released) return;
+  try {
+    if (released.kind === 'offered') emitOffer(released.offer);
+    else emitSlotAvailable(released.slotId, released.venueId, released.slot);
+  } catch (err) {
+    console.error('[bookings] realtime publish failed:', err);
+  }
 }
 
 function formatDate(slotDate: string | Date): string {
-  const d = slotDate instanceof Date ? slotDate : new Date(slotDate);
-  return d.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
+  // Formatted from the calendar day itself, not from an instant — the
+  // club's Saturday must not become Friday for a reader east of UTC.
+  const [y, m, d] = toDateString(slotDate).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('de-DE', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
 }
 
 function formatTime(slotTime: string): string {

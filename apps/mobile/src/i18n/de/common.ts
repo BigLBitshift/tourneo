@@ -110,6 +110,7 @@ export default {
     dobFormat: 'Format: TT.MM.JJJJ',
     dobAge18: 'Du musst mindestens 18 Jahre alt sein',
     dobAge18Hint: 'Du musst mindestens 18 Jahre alt sein',
+    legalUnavailable: 'AGB und Datenschutzerklärung konnten nicht geladen werden. Bitte prüfe deine Verbindung und versuche es erneut.',
     termsRequired: 'AGB müssen akzeptiert werden',
     privacyRequired: 'Datenschutz muss akzeptiert werden',
     ageRequired: 'Altersbestätigung erforderlich',
@@ -472,6 +473,8 @@ export default {
     version: 'Version',
   },
   settings: {
+    blockedUsers: 'Blockierte Nutzer',
+    support: 'Hilfe & Support',
     title: 'Einstellungen',
     profile: 'Profil',
     displayName: 'Anzeigename',

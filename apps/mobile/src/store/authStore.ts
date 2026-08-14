@@ -22,6 +22,11 @@ export interface User {
   apple_user_id?: string;
 }
 
+/**
+ * Mirrors `registerSchema` in apps/backend/src/validators/auth.ts.
+ * The three consent literals and both version ids are required by the
+ * server — omitting any of them fails validation with a 400.
+ */
 export interface RegisterData {
   email: string;
   password: string;
@@ -30,13 +35,16 @@ export interface RegisterData {
   display_name?: string;
   date_of_birth?: string;
   city?: string;
-  age_verified?: boolean;
-  accept_terms?: boolean;
-  accept_privacy?: boolean;
-  media_consent?: boolean;
-  consent_terms?: boolean;
-  consent_privacy?: boolean;
-  consent_age_verification?: boolean;
+  region?: string;
+  country?: string;
+  locale?: string;
+  consent_terms: true;
+  consent_privacy: true;
+  consent_age: true;
+  consent_media?: boolean;
+  terms_version_id: number;
+  privacy_version_id: number;
+  referral_code?: string;
 }
 
 interface AuthState {

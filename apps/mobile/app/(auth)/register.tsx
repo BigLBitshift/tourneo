@@ -2,7 +2,7 @@
  * Register Screen – Tourneo
  * Email registration + Apple Sign-In + consent checkboxes
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   KeyboardAvoidingView, Platform, Alert, Switch,
@@ -14,7 +14,16 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import { useTheme } from '../../src/providers/ThemeProvider';
 import { TButton, TInput, THeader, TDivider } from '../../src/components/common';
 import { useAuthStore } from '../../src/store/authStore';
+import api from '../../src/api/client';
 import { spacing, fontSize, fontWeight } from '../../src/theme/spacing';
+
+/** Calendar-correct age in full years — no 365.25 approximation. */
+function ageInYears(dob: Date, now: Date = new Date()): number {
+  let age = now.getFullYear() - dob.getFullYear();
+  const monthDiff = now.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < dob.getDate())) age -= 1;
+  return age;
+}
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -38,6 +47,34 @@ export default function RegisterScreen() {
   });
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  /**
+   * The backend ties every consent record to the exact legal document version
+   * the user accepted (Art. 7 Abs. 1 DSGVO). Both ids are mandatory in
+   * `registerSchema`, so we resolve them before the form can be submitted.
+   */
+  const [legalVersions, setLegalVersions] = useState<{ terms: number; privacy: number } | null>(null);
+  const [legalError, setLegalError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [terms, privacy] = await Promise.all([
+          api.get('/legal/terms'),
+          api.get('/legal/privacy'),
+        ]);
+        if (cancelled) return;
+        setLegalVersions({ terms: terms.data.data.id, privacy: privacy.data.data.id });
+        setLegalError(false);
+      } catch {
+        if (!cancelled) setLegalError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const updateForm = (key: string, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -76,8 +113,7 @@ export default function RegisterScreen() {
       } else {
         const parts = form.dateOfBirth.split('.');
         const dob = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-        const age = Math.floor((Date.now() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
-        if (age < 18) newErrors.dateOfBirth = t('auth.dobAge18');
+        if (ageInYears(dob) < 18) newErrors.dateOfBirth = t('auth.dobAge18');
       }
     }
 
@@ -99,6 +135,10 @@ export default function RegisterScreen() {
 
   const handleRegister = async () => {
     if (!validate()) return;
+    if (!legalVersions) {
+      Alert.alert(t('common.error'), t('auth.legalUnavailable'), [{ text: t('common.ok') }]);
+      return;
+    }
     try {
       await register({
         email: form.email.trim().toLowerCase(),
@@ -107,9 +147,11 @@ export default function RegisterScreen() {
         first_name: form.firstName.trim(),
         last_name: form.lastName.trim(),
         date_of_birth: convertDateFormat(form.dateOfBirth),
-        consent_terms: consents.terms,
-        consent_privacy: consents.privacy,
-        consent_age_verification: consents.age18,
+        consent_terms: true,
+        consent_privacy: true,
+        consent_age: true,
+        terms_version_id: legalVersions.terms,
+        privacy_version_id: legalVersions.privacy,
       });
       router.replace('/(auth)/consent');
     } catch (error: unknown) {
@@ -320,10 +362,17 @@ export default function RegisterScreen() {
             />
           </View>
 
+          {legalError && (
+            <Text style={[styles.legalError, { color: colors.error }]}>
+              {t('auth.legalUnavailable')}
+            </Text>
+          )}
+
           <TButton
             title={t('auth.createAccountBtn')}
             onPress={handleRegister}
             loading={isLoading}
+            disabled={!legalVersions}
             size="lg"
           />
 
@@ -361,6 +410,7 @@ const styles = StyleSheet.create({
   consentTextContainer: { flex: 1, marginLeft: spacing.sm, paddingTop: 2 },
   consentLabel: { fontSize: fontSize.sm, lineHeight: 20 },
   consentError: { fontSize: fontSize.xs, marginTop: 2 },
+  legalError: { fontSize: fontSize.sm, marginBottom: spacing.md, textAlign: 'center' },
   loginLink: { flexDirection: 'row', justifyContent: 'center', marginTop: spacing.xl },
   loginText: { fontSize: fontSize.sm },
   loginLinkText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold as any },

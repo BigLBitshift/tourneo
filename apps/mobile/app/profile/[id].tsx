@@ -26,6 +26,7 @@ import type { Colors } from '../../src/theme/colors';
 import { spacing, fontSize, fontWeight, radius } from '../../src/theme/spacing';
 import { TAvatar, TRatingBadge, TRatingChart, TEmptyState, type RatingPoint } from '../../src/components/common';
 import { useAuthStore } from '../../src/store/authStore';
+import { useModerationActions } from '../../src/hooks/useModerationActions';
 import {
   getPublicProfile,
   getHeadToHead,
@@ -47,6 +48,7 @@ export default function PlayerProfileScreen() {
   const me = useAuthStore((s) => s.user);
   const targetId = Number(id);
   const isSelf = me?.id === targetId;
+  const { showActions } = useModerationActions();
 
   const [sport, setSport] = useState<Sport>('padel');
   const [profile, setProfile] = useState<PublicPlayerProfile | null>(null);
@@ -137,6 +139,27 @@ export default function PlayerProfileScreen() {
         {!notDiscoverable && (
           <TouchableOpacity style={styles.shareBtn} onPress={onShare} hitSlop={10}>
             <Ionicons name="share-outline" size={22} color={colors.textPrimary as string} />
+          </TouchableOpacity>
+        )}
+        {/* Guideline 1.2: a profile must be reportable and its owner
+            blockable, from the profile itself. */}
+        {!isSelf && (
+          <TouchableOpacity
+            style={styles.shareBtn}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Melden oder blockieren"
+            onPress={() =>
+              showActions({
+                contentType: 'profile',
+                contentId: targetId,
+                authorUserId: targetId,
+                authorName: profile?.display_name ?? null,
+                onBlocked: () => router.back(),
+              })
+            }
+          >
+            <Ionicons name="ellipsis-horizontal" size={22} color={colors.textPrimary as string} />
           </TouchableOpacity>
         )}
       </View>

@@ -1,4 +1,5 @@
 import { env } from './environment';
+import { buildSslOptions } from './dbSsl';
 import type { Knex } from 'knex';
 
 const config: { [key: string]: Knex.Config } = {
@@ -37,7 +38,10 @@ const config: { [key: string]: Knex.Config } = {
       password: env.db.password,
       charset: 'utf8mb4',
       timezone: '+00:00',
-      ssl: { rejectUnauthorized: false },
+      // Same verified-TLS policy as the runtime pool; see
+      // config/database.ts. Migrations run with the same credentials
+      // against the same server and must not be the weaker path in.
+      ssl: buildSslOptions(),
     },
     pool: {
       min: env.db.poolMin,
@@ -46,7 +50,19 @@ const config: { [key: string]: Knex.Config } = {
     migrations: {
       directory: '../migrations',
       tableName: 'tourneo_knex_migrations',
-      extension: 'ts',
+      extension: 'js',
+      // In production this knexfile runs as compiled JavaScript from
+      // `dist/config/`, so `../migrations` resolves to `dist/migrations`.
+      // Pinning loadExtensions is load-bearing: `declaration: true` emits
+      // a `.d.ts` next to every migration, and knex's default extension
+      // list includes `.ts` — without this it would try to run every type
+      // declaration file as a migration.
+      loadExtensions: ['.js'],
+    },
+    seeds: {
+      directory: '../seeds',
+      extension: 'js',
+      loadExtensions: ['.js'],
     },
   },
 };

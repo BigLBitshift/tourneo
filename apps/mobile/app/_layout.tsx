@@ -14,6 +14,7 @@ import { useNotificationStore } from '../src/store/notificationStore';
 import { useFavoritesStore } from '../src/store/favoritesStore';
 import { useTheme } from '../src/providers/ThemeProvider';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
+import { RealtimeProvider } from '../src/realtime/RealtimeProvider';
 import { OfflineBanner } from '../src/components/OfflineBanner';
 import { initCrashReporting, setCrashUser } from '../src/utils/crashReport';
 
@@ -50,6 +51,28 @@ async function registerForPushNotifications(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolves a notification's payload to an in-app route.
+ *
+ * Explicit `deeplink` wins; the rest is a fallback for older payloads that
+ * only carried ids. Returns null when there is nowhere sensible to go, so
+ * a tap never lands the user on a broken screen.
+ */
+function routeForNotification(data: Record<string, any> | undefined): string | null {
+  if (!data) return null;
+
+  const deeplink = typeof data.deeplink === 'string' ? data.deeplink : null;
+  if (deeplink?.startsWith('tourneo://')) {
+    const path = deeplink.slice('tourneo://'.length);
+    return path.startsWith('/') ? path : `/${path}`;
+  }
+
+  if (data.offer_id && data.slot_id) return `/slot/${data.slot_id}/claim`;
+  if (data.booking_id) return '/bookings';
+  if (data.event_id) return `/event/${data.event_id}`;
+  return null;
 }
 
 /* ── Root Layout ─────────────────────────────────────────────── */
@@ -110,6 +133,29 @@ export default function RootLayout() {
     setup();
   }, [isAuthenticated, user]);
 
+  /* ── Notification taps ────────────────────────────────────── */
+  useEffect(() => {
+    const go = (data: Record<string, any> | undefined) => {
+      const route = routeForNotification(data);
+      if (route) router.push(route as never);
+    };
+
+    // Cold start: the offer push is specifically the one that arrives
+    // while the app is dead, so the launch notification must be handled
+    // separately — the listener below never fires for it.
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (response) go(response.notification.request.content.data as Record<string, any>);
+      })
+      .catch(() => undefined);
+
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      go(response.notification.request.content.data as Record<string, any>);
+    });
+
+    return () => subscription.remove();
+  }, [router]);
+
   /* ── Consent gate: redirect to consent if logged in but not consented ── */
   useEffect(() => {
     if (!initialised.current) return;
@@ -123,6 +169,7 @@ export default function RootLayout() {
 
   return (
     <ErrorBoundary>
+      <RealtimeProvider>
       <OfflineBanner />
     <Stack
       screenOptions={{
@@ -144,8 +191,10 @@ export default function RootLayout() {
       <Stack.Screen name="event/chat/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="event/recap/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="event/waitlist/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="courts/index" options={{ headerShown: false }} />
       <Stack.Screen name="venue/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="venue/availability/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="slot/[id]/claim" options={{ headerShown: false, presentation: 'modal' }} />
       <Stack.Screen name="onboarding/playtomic" options={{ headerShown: false }} />
       <Stack.Screen name="onboarding/playtomic-verify" options={{ headerShown: false }} />
       <Stack.Screen name="admin/verifications" options={{ headerShown: false }} />
@@ -156,9 +205,11 @@ export default function RootLayout() {
       <Stack.Screen name="support" options={{ headerShown: false }} />
       <Stack.Screen name="legal/[type]" options={{ headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
+      <Stack.Screen name="blocked-users" options={{ headerShown: false }} />
       <Stack.Screen name="matchmaking/index" options={{ headerShown: false }} />
       <Stack.Screen name="profile/[id]" options={{ headerShown: false }} />
     </Stack>
+      </RealtimeProvider>
     </ErrorBoundary>
   );
 }

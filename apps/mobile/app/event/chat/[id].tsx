@@ -21,6 +21,7 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '../../../src/providers/ThemeProvider';
 import { spacing, fontSize, fontWeight, radius } from '../../../src/theme/spacing';
 import { useAuthStore } from '../../../src/store/authStore';
+import { useModerationActions } from '../../../src/hooks/useModerationActions';
 import { listChat, postChat } from '../../../src/api/v2';
 import * as Haptics from 'expo-haptics';
 
@@ -39,6 +40,7 @@ export default function ChatScreen() {
   const [sending, setSending] = useState(false);
   const [lastSeenId, setLastSeenId] = useState<number>(0);
   const listRef = useRef<FlatList>(null);
+  const { showActions } = useModerationActions();
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isActiveRef = useRef<boolean>(true);
 
@@ -137,7 +139,24 @@ export default function ChatScreen() {
         renderItem={({ item }) => {
           const mine = item.user_id === myUserId;
           return (
-            <View
+            <TouchableOpacity
+              activeOpacity={mine ? 1 : 0.7}
+              // Guideline 1.2: every piece of user-generated content needs a
+              // reachable report action. Long-press is the platform idiom
+              // and keeps the bubble itself uncluttered.
+              onLongPress={
+                mine
+                  ? undefined
+                  : () =>
+                      showActions({
+                        contentType: 'chat_message',
+                        contentId: item.id,
+                        authorUserId: item.user_id,
+                        authorName: item.display_name,
+                        onBlocked: load,
+                      })
+              }
+              accessibilityHint={mine ? undefined : 'Gedrückt halten zum Melden oder Blockieren'}
               style={[
                 styles.bubble,
                 mine
@@ -151,7 +170,7 @@ export default function ChatScreen() {
               <Text style={[styles.msg, { color: mine ? '#fff' : colors.textPrimary }]}>
                 {item.message}
               </Text>
-            </View>
+            </TouchableOpacity>
           );
         }}
         ListEmptyComponent={

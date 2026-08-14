@@ -162,7 +162,7 @@ export default function SettingsScreen() {
                   style: 'destructive',
                   onPress: async () => {
                     try {
-                      await api.delete('/users/account');
+                      await api.post('/me/delete-account');
                       await logout();
                       router.replace('/(auth)/onboarding');
                     } catch {
@@ -362,6 +362,19 @@ export default function SettingsScreen() {
             title={t('legal.impressum')}
             leftIcon={<Ionicons name="information-circle-outline" size={20} color={colors.textSecondary as string} />}
             onPress={() => router.push('/legal/impressum')}
+          />
+          {/* A block the user cannot undo is a trap rather than a control,
+              and App Store review looks for this path specifically. */}
+          <TListItem
+            title={t('settings.blockedUsers')}
+            leftIcon={<Ionicons name="ban-outline" size={20} color={colors.textSecondary as string} />}
+            onPress={() => router.push('/blocked-users')}
+          />
+          {/* The support screen existed but was unreachable from the app. */}
+          <TListItem
+            title={t('settings.support')}
+            leftIcon={<Ionicons name="help-buoy-outline" size={20} color={colors.textSecondary as string} />}
+            onPress={() => router.push('/support')}
           />
         </TCard>
 

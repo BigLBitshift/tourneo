@@ -293,4 +293,19 @@ router.post(
   }
 );
 
+/**
+ * Everything the user is waiting for, split into passive queue entries and
+ * live offers with a countdown. Drives the "In der Warteschlange" section
+ * on the bookings screen and the cold-start recovery when a push arrives
+ * while the app is dead.
+ */
+router.get('/waitlist', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { SlotQueueService } = await import('../services/slotQueueService');
+    res.json({ success: true, data: await SlotQueueService.myQueue(req.user!.userId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export { router as meRouter };

@@ -16,14 +16,16 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { Stack, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../src/providers/ThemeProvider';
 import { spacing, fontSize, fontWeight, radius } from '../src/theme/spacing';
 import { useBookingStore } from '../src/store/bookingStore';
 import { useToast } from '../src/components/common';
-import type { CourtBooking } from '../src/api/v2';
+import { getMyQueue, type CourtBooking, type MyQueueEntry } from '../src/api/v2';
+import { useTopic } from '../src/realtime/RealtimeProvider';
+import { useAuthStore } from '../src/store/authStore';
 
 const CANCEL_CUTOFF_MS = 2 * 60 * 60 * 1000;
 
@@ -50,15 +52,50 @@ export default function MyBookingsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [cancellingId, setCancellingId] = useState<number | null>(null);
 
+  /** Queue entries and live offers, shown above the bookings themselves. */
+  const [queue, setQueue] = useState<{ queued: MyQueueEntry[]; offers: MyQueueEntry[] }>({
+    queued: [],
+    offers: [],
+  });
+  const userId = useAuthStore((s) => s.user?.id);
+
+  const loadQueue = useCallback(async () => {
+    try {
+      setQueue(await getMyQueue());
+    } catch {
+      // A queue that fails to load must not break the bookings list.
+    }
+  }, []);
+
   useEffect(() => {
     fetchMine();
   }, [fetchMine]);
 
+  // The screen was mount-only before, so a booking made elsewhere never
+  // appeared until the app restarted.
+  useFocusEffect(
+    useCallback(() => {
+      fetchMine();
+      loadQueue();
+    }, [fetchMine, loadQueue])
+  );
+
+  // Position changes and new offers arrive live while the screen is open.
+  useTopic(userId ? `user:${userId}` : null, (event) => {
+    if (
+      event.event === 'offer_created' ||
+      event.event === 'offer_expired' ||
+      event.event === 'position_changed'
+    ) {
+      loadQueue();
+    }
+  });
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetchMine();
+    await Promise.all([fetchMine(), loadQueue()]);
     setRefreshing(false);
-  }, [fetchMine]);
+  }, [fetchMine, loadQueue]);
 
   const { upcoming, past } = useMemo(() => {
     const now = Date.now();
@@ -205,19 +242,41 @@ export default function MyBookingsScreen() {
       ) : (
         <FlatList
           data={[
+            ...(queue.offers.length
+              ? [{ kind: 'header', title: 'Platz für dich reserviert', count: queue.offers.length }]
+              : []),
+            ...queue.offers.map((q) => ({ kind: 'queue' as const, entry: q })),
+            ...(queue.queued.length
+              ? [{ kind: 'header', title: 'In der Warteschlange', count: queue.queued.length }]
+              : []),
+            ...queue.queued.map((q) => ({ kind: 'queue' as const, entry: q })),
             ...(upcoming.length ? [{ kind: 'header', title: 'Anstehend', count: upcoming.length }] : []),
             ...upcoming.map((b) => ({ kind: 'booking' as const, booking: b })),
             ...(past.length ? [{ kind: 'header', title: 'Vergangen', count: past.length }] : []),
             ...past.map((b) => ({ kind: 'booking' as const, booking: b })),
           ] as any[]}
           keyExtractor={(item, idx) =>
-            item.kind === 'header' ? `h-${idx}-${item.title}` : `b-${item.booking.id}`
+            item.kind === 'header'
+              ? `h-${idx}-${item.title}`
+              : item.kind === 'queue'
+                ? `q-${item.entry.entry_id}`
+                : `b-${item.booking.id}`
           }
           renderItem={({ item }: { item: any }) =>
             item.kind === 'header' ? (
               <Text style={[styles.sectionHeader, { color: colors.textTertiary }]}>
                 {item.title} · {item.count}
               </Text>
+            ) : item.kind === 'queue' ? (
+              <QueueRow
+                entry={item.entry}
+                colors={colors}
+                onPress={() =>
+                  item.entry.offer
+                    ? router.push(`/slot/${item.entry.slot_id}/claim` as never)
+                    : router.push(`/venue/availability/${item.entry.venue_id}` as never)
+                }
+              />
             ) : (
               renderBooking({ item: item.booking })
             )
@@ -252,8 +311,96 @@ export default function MyBookingsScreen() {
   );
 }
 
+/**
+ * A queue entry or a live offer.
+ *
+ * An offer is visually loud on purpose — it has a deadline, and the user
+ * losing a court because the row looked like every other row would be the
+ * feature's worst failure mode.
+ */
+function QueueRow({
+  entry,
+  colors,
+  onPress,
+}: {
+  entry: MyQueueEntry;
+  colors: any;
+  onPress: () => void;
+}) {
+  const hasOffer = !!entry.offer;
+  const where = [entry.venue_name, entry.court_name].filter(Boolean).join(' · ') || 'Platz';
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={
+        hasOffer
+          ? `Platz reserviert bei ${where}, jetzt sichern`
+          : `Warteschlange Position ${entry.position} von ${entry.queue_length} bei ${where}`
+      }
+      style={[
+        styles.queueRow,
+        {
+          backgroundColor: hasOffer ? colors.primary + '18' : colors.surface,
+          borderColor: hasOffer ? (colors.primary as string) : colors.cardBorder,
+        },
+      ]}
+    >
+      <View
+        style={[
+          styles.queueBadge,
+          { backgroundColor: hasOffer ? (colors.primary as string) : colors.surfaceSecondary },
+        ]}
+      >
+        {hasOffer ? (
+          <Ionicons name="flash" size={18} color="#FFF" />
+        ) : (
+          <Text style={[styles.queuePos, { color: colors.textPrimary }]}>
+            {entry.position ?? '–'}
+          </Text>
+        )}
+      </View>
+
+      <View style={styles.queueBody}>
+        <Text style={[styles.queueVenue, { color: colors.textPrimary }]} numberOfLines={1}>
+          {where}
+        </Text>
+        <Text style={[styles.queueMeta, { color: colors.textTertiary }]}>
+          {formatDate(new Date(`${String(entry.slot_date).slice(0, 10)}T12:00:00`))} ·{' '}
+          {formatTime(entry.slot_start)}–{formatTime(entry.slot_end)} Uhr
+        </Text>
+        <Text
+          style={[styles.queueStatus, { color: hasOffer ? colors.primary : colors.textTertiary }]}
+        >
+          {hasOffer
+            ? 'Für dich reserviert — jetzt sichern'
+            : `Platz ${entry.position ?? '–'} von ${entry.queue_length}`}
+        </Text>
+      </View>
+
+      <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  queueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+  },
+  queueBadge: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  queuePos: { fontSize: fontSize.base, fontWeight: fontWeight.bold as any, fontVariant: ['tabular-nums'] },
+  queueBody: { flex: 1, gap: 1 },
+  queueVenue: { fontSize: fontSize.base, fontWeight: fontWeight.semibold as any },
+  queueMeta: { fontSize: fontSize.xs },
+  queueStatus: { fontSize: fontSize.xs, fontWeight: fontWeight.medium as any, marginTop: 1 },
   loader: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   listContent: { padding: spacing.lg, gap: spacing.md, paddingBottom: 120 },
   sectionHeader: {

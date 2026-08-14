@@ -1,0 +1,18 @@
+# Keep the build context small and keep secrets out of image layers.
+node_modules
+**/node_modules
+apps/backend/dist
+apps/mobile/.expo
+apps/mobile/android
+apps/mobile/ios
+.git
+.github
+docs
+design_handoff_tourneo_night_court
+.maestro
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+test-results.txt
+coverage

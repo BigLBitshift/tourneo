@@ -35,6 +35,11 @@ export const logger = pino({
       '*.refresh_token',
       'identity_token',
       '*.identity_token',
+      // The realtime hub authenticates via `?token=` because React
+      // Native cannot reliably set headers on a WebSocket upgrade, so a
+      // bare `token` field must never survive into a log line either.
+      'token',
+      '*.token',
     ],
     censor: '[REDACTED]',
   },

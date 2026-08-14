@@ -1,4 +1,15 @@
 import { db, t } from '../config/database';
+import { DEFAULT_TIMEZONE, localToUtc, toMysqlDateTime } from '../utils/slotTime';
+
+export type SlotStatus = 'available' | 'held' | 'booked' | 'blocked';
+
+/**
+ * Where a slot's information came from. The UI renders `venue` and
+ * `import` slots as bookable and everything else as "probably free — ask
+ * the club", so coverage can grow without the app claiming more certainty
+ * than it has.
+ */
+export type SlotSource = 'venue' | 'import' | 'assumed' | 'crowd' | 'admin';
 
 export interface AvailabilitySlot {
   id: number;
@@ -7,7 +18,11 @@ export interface AvailabilitySlot {
   slot_date: string;
   slot_start: string;
   slot_end: string;
-  status: 'available' | 'booked' | 'blocked';
+  starts_at_utc: string | Date | null;
+  ends_at_utc: string | Date | null;
+  status: SlotStatus;
+  source: SlotSource;
+  confidence: number;
   price_cents: number | null;
   booking_url: string | null;
 }
@@ -20,8 +35,19 @@ export interface AvailabilitySlot {
  *   - Filtering by time range and status
  *   - Admin upsert of slots (for venue managers)
  *   - Bulk generation of recurring slots
+ *
+ * Every write also records the slot's absolute start/end instant, resolved
+ * through the venue's timezone. Slot times are stored as the club's wall
+ * clock, which is what a club can maintain, but every comparison the rest
+ * of the system makes — is this in the past, does this hold expire soon —
+ * needs a real instant. See `utils/slotTime.ts`.
  */
 export class CourtAvailabilityService {
+  /** Reads a venue's IANA timezone, falling back to Europe/Berlin. */
+  private static async venueTimezone(venueId: number): Promise<string> {
+    const venue = await db(t('venues')).where('id', venueId).select('timezone').first();
+    return venue?.timezone || DEFAULT_TIMEZONE;
+  }
   /**
    * List available slots for a venue on a given date (or date range).
    */
@@ -31,7 +57,7 @@ export class CourtAvailabilityService {
       fromDate?: string;
       toDate?: string;
       courtId?: number;
-      statusFilter?: 'available' | 'booked' | 'blocked';
+      statusFilter?: SlotStatus;
     } = {},
   ): Promise<AvailabilitySlot[]> {
     let q = db(t('court_availability')).where('venue_id', venueId);
@@ -53,11 +79,15 @@ export class CourtAvailabilityService {
     slot_date: string;
     slot_start: string;
     slot_end: string;
-    status?: 'available' | 'booked' | 'blocked';
+    status?: SlotStatus;
+    source?: SlotSource;
+    confidence?: number;
     price_cents?: number | null;
     booking_url?: string | null;
   }): Promise<number> {
     const now = new Date();
+    const timezone = await this.venueTimezone(slot.venue_id);
+
     const existing = await db(t('court_availability'))
       .where('venue_id', slot.venue_id)
       .where('court_id', slot.court_id ?? null)
@@ -65,14 +95,23 @@ export class CourtAvailabilityService {
       .where('slot_start', slot.slot_start)
       .first();
 
+    const instants = {
+      starts_at_utc: toMysqlDateTime(localToUtc(slot.slot_date, slot.slot_start, timezone)),
+      ends_at_utc: toMysqlDateTime(localToUtc(slot.slot_date, slot.slot_end, timezone)),
+    };
+
     if (existing) {
       await db(t('court_availability'))
         .where('id', existing.id)
         .update({
           slot_end: slot.slot_end,
+          ...instants,
           status: slot.status ?? 'available',
+          source: slot.source ?? 'admin',
+          confidence: slot.confidence ?? 100,
           price_cents: slot.price_cents ?? null,
           booking_url: slot.booking_url ?? null,
+          version: db.raw('version + 1'),
           updated_at: now,
         });
       return existing.id;
@@ -84,7 +123,10 @@ export class CourtAvailabilityService {
       slot_date: slot.slot_date,
       slot_start: slot.slot_start,
       slot_end: slot.slot_end,
+      ...instants,
       status: slot.status ?? 'available',
+      source: slot.source ?? 'admin',
+      confidence: slot.confidence ?? 100,
       price_cents: slot.price_cents ?? null,
       booking_url: slot.booking_url ?? null,
       created_at: now,
@@ -112,18 +154,30 @@ export class CourtAvailabilityService {
     slot_duration_minutes: number;
     price_cents?: number;
     booking_url?: string;
+    source?: SlotSource;
   }): Promise<number> {
     if (!Number.isFinite(params.slot_duration_minutes) || params.slot_duration_minutes <= 0) {
       throw new Error('slot_duration_minutes must be a positive number');
     }
-    const fromDate = new Date(params.from_date);
-    const toDate = new Date(params.to_date);
+    // Calendar arithmetic runs at UTC midnight throughout. Building the
+    // cursor from a local-midnight Date and reading it back with
+    // toISOString() shifts the calendar day for any server west of UTC.
+    const fromDate = new Date(`${String(params.from_date).slice(0, 10)}T00:00:00Z`);
+    const toDate = new Date(`${String(params.to_date).slice(0, 10)}T00:00:00Z`);
     if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
       throw new Error('Invalid from_date / to_date');
     }
     if (toDate < fromDate) {
       throw new Error('to_date must be on or after from_date');
     }
+
+    const startMinutes = parseHhMm(params.daily_start);
+    const endMinutes = parseHhMm(params.daily_end);
+    if (endMinutes <= startMinutes) {
+      throw new Error('daily_end must be after daily_start');
+    }
+
+    const timezone = await this.venueTimezone(params.venue_id);
     const now = new Date();
     const slots: any[] = [];
 
@@ -142,48 +196,47 @@ export class CourtAvailabilityService {
       .orderBy('id', 'asc')
       .select('weekday_mask', 'start_time', 'end_time', 'price_cents');
 
-    const priceFor = (slotStart: Date): number | null => {
-      // Bitmask: Mon=1 … Sun=64 (getDay(): Sun=0 → bit 64)
-      const dow = slotStart.getDay();
-      const bit = dow === 0 ? 64 : 1 << (dow - 1);
-      const hhmm = `${String(slotStart.getHours()).padStart(2, '0')}:${String(slotStart.getMinutes()).padStart(2, '0')}:00`;
+    const priceFor = (weekdayBit: number, hhmmss: string): number | null => {
       for (const rule of rules) {
-        if ((rule.weekday_mask & bit) === 0) continue;
-        if (hhmm >= String(rule.start_time) && hhmm < String(rule.end_time)) {
+        if ((rule.weekday_mask & weekdayBit) === 0) continue;
+        if (hhmmss >= String(rule.start_time) && hhmmss < String(rule.end_time)) {
           return rule.price_cents;
         }
       }
       return params.price_cents ?? null;
     };
 
-    for (let d = new Date(fromDate); d <= toDate; d.setDate(d.getDate() + 1)) {
+    for (let d = new Date(fromDate); d <= toDate; d.setUTCDate(d.getUTCDate() + 1)) {
       const dateStr = d.toISOString().slice(0, 10);
-      const [startH, startM] = params.daily_start.split(':').map(Number);
-      const [endH, endM] = params.daily_end.split(':').map(Number);
-      const dayStart = new Date(d);
-      dayStart.setHours(startH, startM, 0, 0);
-      const dayEnd = new Date(d);
-      dayEnd.setHours(endH, endM, 0, 0);
+      // Bitmask: Mon=1 … Sun=64 (getUTCDay(): Sun=0 → bit 64)
+      const dow = d.getUTCDay();
+      const weekdayBit = dow === 0 ? 64 : 1 << (dow - 1);
 
       for (
-        let slotStart = new Date(dayStart);
-        slotStart.getTime() + params.slot_duration_minutes * 60000 <= dayEnd.getTime();
-        slotStart = new Date(slotStart.getTime() + params.slot_duration_minutes * 60000)
+        let startMin = startMinutes;
+        startMin + params.slot_duration_minutes <= endMinutes;
+        startMin += params.slot_duration_minutes
       ) {
         if (slots.length >= this.MAX_SLOTS_PER_GENERATION) {
           throw new Error(
             `Too many slots requested (max ${this.MAX_SLOTS_PER_GENERATION}); narrow the date range or use a longer slot duration.`
           );
         }
-        const slotEnd = new Date(slotStart.getTime() + params.slot_duration_minutes * 60000);
+        const slotStart = formatMinutes(startMin);
+        const slotEnd = formatMinutes(startMin + params.slot_duration_minutes);
+
         slots.push({
           venue_id: params.venue_id,
           court_id: params.court_id ?? null,
           slot_date: dateStr,
-          slot_start: this.formatTime(slotStart),
-          slot_end: this.formatTime(slotEnd),
+          slot_start: slotStart,
+          slot_end: slotEnd,
+          starts_at_utc: toMysqlDateTime(localToUtc(dateStr, slotStart, timezone)),
+          ends_at_utc: toMysqlDateTime(localToUtc(dateStr, slotEnd, timezone)),
           status: 'available',
-          price_cents: priceFor(slotStart),
+          source: params.source ?? 'admin',
+          confidence: 100,
+          price_cents: priceFor(weekdayBit, slotStart),
           booking_url: params.booking_url ?? null,
           created_at: now,
           updated_at: now,
@@ -192,11 +245,60 @@ export class CourtAvailabilityService {
     }
 
     if (slots.length === 0) return 0;
-    await db(t('court_availability')).insert(slots);
+
+    // Idempotent by design: re-running a generation over an overlapping
+    // range must refresh those slots, never duplicate them. Migration 018
+    // added the unique key this relies on. Booked, held and blocked slots
+    // are deliberately left alone — a regenerate must not silently free a
+    // court someone already reserved.
+    await db.raw(
+      `INSERT INTO \`${t('court_availability')}\`
+         (venue_id, court_id, slot_date, slot_start, slot_end, starts_at_utc, ends_at_utc,
+          status, source, confidence, price_cents, booking_url, created_at, updated_at)
+       VALUES ${slots.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?,?,?)').join(',')}
+       ON DUPLICATE KEY UPDATE
+         slot_end     = VALUES(slot_end),
+         starts_at_utc= VALUES(starts_at_utc),
+         ends_at_utc  = VALUES(ends_at_utc),
+         source       = VALUES(source),
+         confidence   = VALUES(confidence),
+         price_cents  = VALUES(price_cents),
+         booking_url  = VALUES(booking_url),
+         version      = version + 1,
+         updated_at   = VALUES(updated_at)`,
+      slots.flatMap((s) => [
+        s.venue_id,
+        s.court_id,
+        s.slot_date,
+        s.slot_start,
+        s.slot_end,
+        s.starts_at_utc,
+        s.ends_at_utc,
+        s.status,
+        s.source,
+        s.confidence,
+        s.price_cents,
+        s.booking_url,
+        s.created_at,
+        s.updated_at,
+      ])
+    );
     return slots.length;
   }
+}
 
-  private static formatTime(d: Date): string {
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+/** `"08:30"` / `"08:30:00"` → minutes since midnight. */
+function parseHhMm(value: string): number {
+  const [h, m] = String(value).split(':').map(Number);
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    throw new Error(`Invalid time of day: ${value}`);
   }
+  return h * 60 + m;
+}
+
+/** Minutes since midnight → `"HH:MM:SS"`. */
+function formatMinutes(total: number): string {
+  const h = Math.floor(total / 60);
+  const m = total % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
 }

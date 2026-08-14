@@ -5,6 +5,7 @@ import { sendBookingReminders } from './bookingReminder';
 import { pushCityRankChanges } from './cityRankPush';
 import { RegistrationService } from '../services/registrationService';
 import { CourtBookingService } from '../services/courtBookingService';
+import { SlotQueueService } from '../services/slotQueueService';
 import { PlayNowService } from '../services/playNowService';
 import { SeasonService } from '../services/seasonService';
 import { StreakService } from '../services/streakService';
@@ -59,6 +60,14 @@ const SCHEDULED_JOBS: ScheduledJob[] = [
     // (15-minute TTL on pending_payment bookings).
     everyMs: 5 * 60 * 1000,
     run: () => CourtBookingService.expireUnpaidBookings(),
+  },
+  {
+    name: 'slot-offer-expiry',
+    // Expires lapsed claim windows and passes each slot to the next
+    // person in line. Runs every 30s: a countdown that visibly hits zero
+    // and then sits there for minutes reads as broken.
+    everyMs: 30 * 1000,
+    run: () => SlotQueueService.expireOffers(),
   },
   {
     name: 'play-now-expiry',
