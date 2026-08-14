@@ -452,7 +452,7 @@ export default function HomeScreen() {
                 label="Courts"
                 sub="Venues entdecken"
                 hue={200}
-                onPress={() => router.push('/(tabs)/turniere')}
+                onPress={() => router.push('/courts')}
               />
               <NCQuickTile
                 icon="medal"

@@ -270,7 +270,7 @@ export default function SpielenScreen() {
     } else if (sportId === 'freies-spiel') {
       router.push('/matchmaking');
     } else if (sportId === 'plaetze') {
-      router.push('/(tabs)/turniere');
+      router.push('/courts');
     }
   };
 

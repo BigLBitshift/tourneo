@@ -353,6 +353,16 @@ export async function getPlayerEloHistory(
 }
 
 // ─── Court availability ──────────────────────────────────
+export type SlotStatus = 'available' | 'held' | 'booked' | 'blocked';
+
+/**
+ * Where the slot information came from. `venue` and `import` are club-
+ * confirmed and bookable; `assumed` and `crowd` are shown as "probably
+ * free — ask the club" so coverage can grow without the app claiming more
+ * certainty than it has.
+ */
+export type SlotSource = 'venue' | 'import' | 'assumed' | 'crowd' | 'admin';
+
 export type AvailabilitySlot = {
   id: number;
   venue_id: number;
@@ -360,9 +370,14 @@ export type AvailabilitySlot = {
   slot_date: string;
   slot_start: string;
   slot_end: string;
-  status: 'available' | 'booked' | 'blocked';
+  starts_at_utc?: string | null;
+  ends_at_utc?: string | null;
+  status: SlotStatus;
+  source?: SlotSource;
+  confidence?: number;
   price_cents: number | null;
   booking_url: string | null;
+  queue_length?: number;
 };
 
 export async function getVenueAvailability(
@@ -666,5 +681,96 @@ export async function getMySeasonHistory(): Promise<
 // ─── Private Events ──────────────────────────────────────
 export async function getEventByInvite(token: string) {
   const res = await apiClient.get(`/events/by-invite/${encodeURIComponent(token)}`);
+  return res.data.data;
+}
+
+// ─── Live court queue ────────────────────────────────────
+/**
+ * The queue on a booked slot: join it, and when the court frees up it is
+ * held for you for a few minutes while you decide.
+ */
+export type QueueStanding = {
+  entry_id: number;
+  position: number;
+  queue_length: number;
+  ahead_of_you: { free: number; plus: number; club: number };
+  your_tier: 'free' | 'plus' | 'club';
+  /** Null unless you are on the free tier — and honest when Plus buys nothing. */
+  position_if_plus: number | null;
+  auto_claim: boolean;
+};
+
+export type SlotDetail = AvailabilitySlot & {
+  venue_name: string | null;
+  venue_city: string | null;
+  court_name: string | null;
+  queue_length: number;
+  hold: { expires_at: string } | null;
+  my_entry: QueueStanding | null;
+};
+
+export type SlotOffer = {
+  offer_id: number;
+  expires_at: string;
+  seconds_left: number;
+};
+
+export type MyQueueEntry = {
+  entry_id: number;
+  slot_id: number;
+  status: 'queued' | 'offered';
+  auto_claim: boolean;
+  slot_date: string;
+  slot_start: string;
+  slot_end: string;
+  price_cents: number | null;
+  venue_id: number;
+  venue_name: string | null;
+  court_name: string | null;
+  position: number | null;
+  queue_length: number;
+  offer: SlotOffer | null;
+};
+
+export async function getSlot(slotId: number): Promise<SlotDetail> {
+  const res = await apiClient.get(`/slots/${slotId}`);
+  return res.data.data;
+}
+
+export async function joinSlotQueue(
+  slotId: number,
+  opts: { autoClaim?: boolean } = {}
+): Promise<QueueStanding> {
+  const res = await apiClient.post(`/slots/${slotId}/waitlist`, {
+    auto_claim: opts.autoClaim === true,
+  });
+  return res.data.data;
+}
+
+export async function leaveSlotQueue(slotId: number): Promise<void> {
+  await apiClient.delete(`/slots/${slotId}/waitlist`);
+}
+
+export async function getMySlotStanding(slotId: number): Promise<QueueStanding> {
+  const res = await apiClient.get(`/slots/${slotId}/waitlist/me`);
+  return res.data.data;
+}
+
+/** Converts a held slot into a real booking. Same shape as POST /bookings. */
+export async function claimSlot(slotId: number, offerId?: number): Promise<CourtBooking> {
+  const res = await apiClient.post(`/slots/${slotId}/claim`, offerId ? { offer_id: offerId } : {});
+  return res.data.data;
+}
+
+/** Passes the offer on immediately rather than letting it run out. */
+export async function declineSlotOffer(slotId: number, offerId?: number): Promise<void> {
+  await apiClient.post(`/slots/${slotId}/decline`, offerId ? { offer_id: offerId } : {});
+}
+
+export async function getMyQueue(): Promise<{
+  queued: MyQueueEntry[];
+  offers: MyQueueEntry[];
+}> {
+  const res = await apiClient.get('/me/waitlist');
   return res.data.data;
 }

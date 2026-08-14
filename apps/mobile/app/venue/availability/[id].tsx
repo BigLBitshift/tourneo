@@ -22,13 +22,20 @@ import {
   Linking,
   RefreshControl,
 } from 'react-native';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as WebBrowser from 'expo-web-browser';
 import { useTheme } from '../../../src/providers/ThemeProvider';
 import { spacing, fontSize, fontWeight, radius } from '../../../src/theme/spacing';
-import { getVenueAvailability, type AvailabilitySlot } from '../../../src/api/v2';
+import {
+  getVenueAvailability,
+  joinSlotQueue,
+  leaveSlotQueue,
+  type AvailabilitySlot,
+  type QueueStanding,
+} from '../../../src/api/v2';
+import { useTopic } from '../../../src/realtime/RealtimeProvider';
 import type { Colors } from '../../../src/theme/colors';
 import { useBookingStore } from '../../../src/store/bookingStore';
 import { useAuthStore } from '../../../src/store/authStore';
@@ -86,6 +93,13 @@ export default function CourtAvailabilityScreen() {
   const [confirmSlot, setConfirmSlot] = useState<AvailabilitySlot | null>(null);
   const [booking, setBooking] = useState(false);
 
+  /** Slot the user tapped to queue for, and their standing once joined. */
+  const [queueSlot, setQueueSlot] = useState<AvailabilitySlot | null>(null);
+  const [standing, setStanding] = useState<QueueStanding | null>(null);
+  const [queueBusy, setQueueBusy] = useState(false);
+  /** Slots this user is queued for, so the grid can show it at a glance. */
+  const [myQueuedSlotIds, setMyQueuedSlotIds] = useState<Set<number>>(new Set());
+
   const load = useCallback(async () => {
     setError(null);
     try {
@@ -111,6 +125,47 @@ export default function CourtAvailabilityScreen() {
     setRefreshing(false);
   }, [load]);
 
+  /**
+   * Live venue state. The socket is an optimisation, never the source of
+   * truth: state transitions are applied in place for instant feedback,
+   * and a `resync` (or a screen focus) falls back to the REST fetch.
+   */
+  const { connected, resyncAt } = useTopic(
+    Number.isInteger(venueId) && venueId > 0 ? `venue:${venueId}` : null,
+    (event) => {
+      const slotId = Number(event.payload?.slot_id);
+      if (!Number.isInteger(slotId)) return;
+
+      if (event.event === 'slot_freed') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+        setSlots((prev) =>
+          prev.map((s) => (s.id === slotId ? { ...s, status: 'available' } : s))
+        );
+      } else if (event.event === 'slot_held') {
+        setSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, status: 'held' } : s)));
+      } else if (event.event === 'slot_booked') {
+        setSlots((prev) => prev.map((s) => (s.id === slotId ? { ...s, status: 'booked' } : s)));
+      } else if (event.event === 'queue_changed') {
+        const queueLength = Number(event.payload?.queue_length ?? 0);
+        setSlots((prev) =>
+          prev.map((s) => (s.id === slotId ? { ...s, queue_length: queueLength } : s))
+        );
+      }
+    }
+  );
+
+  useEffect(() => {
+    if (resyncAt) load();
+  }, [resyncAt, load]);
+
+  // Belt and braces: the socket dies while backgrounded on iOS, so a
+  // refetch on focus guarantees the grid is never stale on return.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
   const daysWithSlots = useMemo(() => {
     const map = new Map<string, number>();
     for (const slot of slots) {
@@ -135,10 +190,65 @@ export default function CourtAvailabilityScreen() {
         router.push('/(auth)/login' as any);
         return;
       }
-      setConfirmSlot(slot);
+      // An available slot is booked directly; anything taken opens the
+      // queue instead of being a dead end.
+      if (slot.status === 'available') setConfirmSlot(slot);
+      else if (slot.status === 'booked' || slot.status === 'held') {
+        setStanding(null);
+        setQueueSlot(slot);
+      }
     },
     [isAuthenticated, router]
   );
+
+  const joinQueue = useCallback(async () => {
+    if (!queueSlot) return;
+    setQueueBusy(true);
+    try {
+      const result = await joinSlotQueue(queueSlot.id);
+      setStanding(result);
+      setMyQueuedSlotIds((prev) => new Set(prev).add(queueSlot.id));
+      setSlots((prev) =>
+        prev.map((s) => (s.id === queueSlot.id ? { ...s, queue_length: result.queue_length } : s))
+      );
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    } catch (err: any) {
+      if (err?.response?.status === 409) {
+        // The slot freed up between render and tap — just book it.
+        showToast('info', 'Der Platz ist gerade frei', 'Du kannst ihn direkt buchen.');
+        await load();
+        setQueueSlot(null);
+      } else {
+        showToast(
+          'error',
+          'Warteschlange nicht möglich',
+          err?.response?.data?.error?.message || 'Bitte später erneut versuchen.'
+        );
+      }
+    } finally {
+      setQueueBusy(false);
+    }
+  }, [queueSlot, showToast, load]);
+
+  const leaveQueue = useCallback(async () => {
+    if (!queueSlot) return;
+    setQueueBusy(true);
+    try {
+      await leaveSlotQueue(queueSlot.id);
+      setMyQueuedSlotIds((prev) => {
+        const next = new Set(prev);
+        next.delete(queueSlot.id);
+        return next;
+      });
+      setStanding(null);
+      setQueueSlot(null);
+      showToast('success', 'Warteschlange verlassen');
+    } catch {
+      showToast('error', 'Konnte die Warteschlange nicht verlassen');
+    } finally {
+      setQueueBusy(false);
+    }
+  }, [queueSlot, showToast]);
 
   const confirmBook = useCallback(async () => {
     if (!confirmSlot) return;
@@ -195,6 +305,20 @@ export default function CourtAvailabilityScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <Stack.Screen options={{ title: 'Platz-Verfügbarkeit', headerShown: true }} />
+
+      {/* The user should always know whether they are seeing live truth
+          or a snapshot — a silent stale grid is worse than an honest one. */}
+      <View style={styles.liveRow}>
+        <View
+          style={[
+            styles.liveDot,
+            { backgroundColor: connected ? (colors.success as string) : colors.textTertiary },
+          ]}
+        />
+        <Text style={[styles.liveText, { color: colors.textTertiary }]}>
+          {connected ? 'Live — freie Plätze erscheinen sofort' : 'Verbindung…'}
+        </Text>
+      </View>
 
       <ScrollView
         horizontal
@@ -269,6 +393,7 @@ export default function CourtAvailabilityScreen() {
                 key={slot.id}
                 slot={slot}
                 colors={colors}
+                queued={myQueuedSlotIds.has(slot.id)}
                 onPress={() => onSlotPress(slot)}
               />
             ))}
@@ -286,6 +411,107 @@ export default function CourtAvailabilityScreen() {
           <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
         </TouchableOpacity>
       </ScrollView>
+
+      <TModal
+        visible={!!queueSlot}
+        onClose={() => !queueBusy && setQueueSlot(null)}
+        title={standing ? 'Du stehst an' : 'In die Warteschlange'}
+      >
+        {queueSlot && (
+          <View style={styles.modalContent}>
+            <Text style={[styles.modalLine, { color: colors.textPrimary }]}>
+              {formatTime(queueSlot.slot_start)} – {formatTime(queueSlot.slot_end)} Uhr
+            </Text>
+
+            {standing ? (
+              <>
+                <Text style={[styles.queuePosition, { color: colors.primary }]}>
+                  #{standing.position}
+                </Text>
+                <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+                  von {standing.queue_length} in der Warteschlange
+                </Text>
+                {standing.ahead_of_you.club + standing.ahead_of_you.plus > 0 && (
+                  <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+                    {standing.ahead_of_you.club > 0 &&
+                      `${standing.ahead_of_you.club} Club-${standing.ahead_of_you.club === 1 ? 'Mitglied' : 'Mitglieder'}`}
+                    {standing.ahead_of_you.club > 0 && standing.ahead_of_you.plus > 0 && ' und '}
+                    {standing.ahead_of_you.plus > 0 &&
+                      `${standing.ahead_of_you.plus} Plus-${standing.ahead_of_you.plus === 1 ? 'Mitglied' : 'Mitglieder'}`}
+                    {' vor dir'}
+                  </Text>
+                )}
+                {/* Only shown when upgrading would genuinely move them up. */}
+                {standing.position_if_plus !== null &&
+                  standing.position_if_plus < standing.position && (
+                    <TouchableOpacity
+                      onPress={() => {
+                        setQueueSlot(null);
+                        router.push('/membership');
+                      }}
+                      style={[styles.upgradeHint, { borderColor: colors.primary + '55' }]}
+                    >
+                      <Ionicons name="flash-outline" size={16} color={colors.primary} />
+                      <Text style={[styles.upgradeText, { color: colors.primary }]}>
+                        Mit Plus wärst du #{standing.position_if_plus}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+                  Wird der Platz frei, halten wir ihn 10 Minuten für dich und schicken dir eine
+                  Benachrichtigung.
+                </Text>
+                <TouchableOpacity
+                  onPress={leaveQueue}
+                  disabled={queueBusy}
+                  style={styles.leaveQueueBtn}
+                >
+                  <Text style={[styles.leaveQueueText, { color: colors.error }]}>
+                    {queueBusy ? 'Einen Moment…' : 'Warteschlange verlassen'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+                  Dieser Platz ist belegt.
+                  {(queueSlot.queue_length ?? 0) > 0
+                    ? ` ${queueSlot.queue_length} ${queueSlot.queue_length === 1 ? 'Person wartet' : 'Personen warten'} bereits.`
+                    : ' Du wärst der Erste in der Warteschlange.'}
+                </Text>
+                <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+                  Wird er frei, gehört er 10 Minuten lang dir.
+                </Text>
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, { backgroundColor: colors.surfaceSecondary }]}
+                    disabled={queueBusy}
+                    onPress={() => setQueueSlot(null)}
+                  >
+                    <Text style={[styles.modalBtnText, { color: colors.textPrimary }]}>
+                      Abbrechen
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.modalBtn,
+                      { backgroundColor: colors.primary, opacity: queueBusy ? 0.7 : 1 },
+                    ]}
+                    disabled={queueBusy}
+                    onPress={joinQueue}
+                  >
+                    {queueBusy ? (
+                      <ActivityIndicator color="#FFF" />
+                    ) : (
+                      <Text style={[styles.modalBtnText, { color: '#FFF' }]}>Anstellen</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        )}
+      </TModal>
 
       <TModal
         visible={!!confirmSlot}
@@ -361,26 +587,47 @@ function SlotCard({
   slot,
   colors,
   onPress,
+  queued,
 }: {
   slot: AvailabilitySlot;
   colors: Colors;
   onPress: () => void;
+  queued: boolean;
 }) {
   const isAvailable = slot.status === 'available';
   const isBlocked = slot.status === 'blocked';
+  const isHeld = slot.status === 'held';
   const price = formatPrice(slot.price_cents);
+  const queueLength = slot.queue_length ?? 0;
+
+  // Only a blocked slot is a genuine dead end. Booked and held slots are
+  // now the entry point to the queue, so they stay tappable and legible
+  // instead of being dimmed out of the interface.
+  const interactive = isAvailable || isBlocked === false;
 
   return (
     <TouchableOpacity
-      disabled={!isAvailable}
+      disabled={isBlocked}
       onPress={onPress}
       activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityLabel={
+        isAvailable
+          ? `${formatTime(slot.slot_start)} Uhr buchen`
+          : isBlocked
+            ? `${formatTime(slot.slot_start)} Uhr blockiert`
+            : `${formatTime(slot.slot_start)} Uhr belegt, ${queueLength} in der Warteschlange`
+      }
       style={[
         styles.slotCard,
         {
           backgroundColor: isAvailable ? colors.surface : colors.surfaceSecondary,
-          borderColor: isAvailable ? colors.primary + '33' : colors.cardBorder,
-          opacity: isAvailable ? 1 : 0.55,
+          borderColor: isAvailable
+            ? colors.primary + '33'
+            : queued
+              ? (colors.primary as string)
+              : colors.cardBorder,
+          opacity: interactive ? 1 : 0.55,
         },
       ]}
     >
@@ -388,13 +635,20 @@ function SlotCard({
         {formatTime(slot.slot_start)} – {formatTime(slot.slot_end)}
       </Text>
       {price && <Text style={[styles.slotPrice, { color: colors.primary }]}>{price}</Text>}
+
       {isAvailable ? (
         <View style={[styles.bookBtn, { backgroundColor: colors.primary }]}>
           <Text style={styles.bookText}>Buchen</Text>
         </View>
+      ) : isBlocked ? (
+        <Text style={[styles.statusText, { color: colors.textTertiary }]}>Blockiert</Text>
+      ) : queued ? (
+        <View style={[styles.bookBtn, { backgroundColor: colors.primary + '22' }]}>
+          <Text style={[styles.bookText, { color: colors.primary }]}>In Warteschlange</Text>
+        </View>
       ) : (
         <Text style={[styles.statusText, { color: colors.textTertiary }]}>
-          {isBlocked ? 'Blockiert' : 'Gebucht'}
+          {isHeld ? 'Wird vergeben' : queueLength > 0 ? `Belegt · ${queueLength} warten` : 'Belegt'}
         </Text>
       )}
     </TouchableOpacity>
@@ -461,6 +715,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   myBookingsText: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.semibold as any },
+  liveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  liveDot: { width: 7, height: 7, borderRadius: 4 },
+  liveText: { fontSize: fontSize.xs },
+  queuePosition: {
+    fontSize: 44,
+    fontWeight: fontWeight.bold as any,
+    fontVariant: ['tabular-nums'],
+    marginTop: spacing.sm,
+  },
+  upgradeHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.sm,
+  },
+  upgradeText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold as any },
+  leaveQueueBtn: { paddingVertical: spacing.md, marginTop: spacing.sm },
+  leaveQueueText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium as any },
   modalContent: { gap: spacing.sm, paddingTop: spacing.sm },
   modalLine: { fontSize: fontSize.sm },
   modalLineBig: { fontSize: fontSize.xl, fontWeight: '800' as any },
