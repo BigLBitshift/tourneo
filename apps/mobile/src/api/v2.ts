@@ -416,10 +416,10 @@ export type CourtBooking = {
   court_name: string | null;
   /**
    * Present when the venue is Stripe-Connect-enabled and the slot is
-   * priced: the booking starts as pending_payment and this secret
-   * confirms the PaymentIntent. Null for pay-at-venue bookings.
+   * priced: the booking starts as pending_payment and this is the hosted
+   * Stripe Checkout page to open. Null for pay-at-venue bookings.
    */
-  client_secret?: string | null;
+  checkout_url?: string | null;
 };
 
 export async function bookSlot(slotId: number, notes?: string): Promise<CourtBooking> {

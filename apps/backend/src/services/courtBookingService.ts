@@ -101,7 +101,7 @@ export class CourtBookingService {
 
     // Stripe call happens OUTSIDE the transaction — network calls inside
     // a DB transaction would hold the slot lock for the whole roundtrip.
-    let clientSecret: string | null = null;
+    let checkoutUrl: string | null = null;
     if (result.canPayInApp && result.amountCents) {
       try {
         const intent = await StripeConnectService.createBookingPaymentIntent({
@@ -113,7 +113,7 @@ export class CourtBookingService {
           userId,
         });
         if (intent) {
-          clientSecret = intent.client_secret;
+          checkoutUrl = intent.checkout_url;
           await db(t('court_bookings')).where('id', result.bookingId).update({
             stripe_payment_intent_id: intent.payment_intent_id,
             updated_at: new Date(),
@@ -132,7 +132,7 @@ export class CourtBookingService {
     }
 
     const booking = await this.getBookingById(result.bookingId, userId);
-    return { ...booking, client_secret: clientSecret };
+    return { ...booking, checkout_url: checkoutUrl };
   }
 
   /**

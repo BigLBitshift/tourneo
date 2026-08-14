@@ -60,6 +60,7 @@ Trotzdem ist die App **heute nicht einreichbar und nicht startbar**. Der Grund i
 | B38 | Brute-Force-Schutz auf null Routen gemountet. | Auf `/login` und `/forgot-password` gemountet, Controller zählt Fehlversuche |
 | B39 | DB-TLS akzeptierte jedes Zertifikat. | Verifikation standardmäßig an, `DB_SSL_CA`, Escape-Hatch in Produktion gesperrt |
 | B45 | Support-Screen aus der App nicht erreichbar. | Aus den Einstellungen verlinkt |
+| B10 | **Stripe-Checkout baute eine erfundene URL** und der Deep-Link-Handler setzte unbekannte Zustände auf `success` → bestätigte Anmeldungen ohne Zahlung. | Server erstellt jetzt eine echte **Stripe Checkout Session** (Karteneingabe, SCA/3DS, Apple Pay) für Turniere **und** Platzbuchungen; der Client rät nie mehr, sondern fragt den tatsächlichen Status über `GET /registrations/:id` ab |
 | — | `DB_TABLE_PREFIX=turneo_` hätte die Fehlschreibung in jeden Tabellennamen gebacken. | korrigiert |
 
 ### 2.2 Offen — Monetarisierung (der größte Block)
@@ -70,9 +71,8 @@ Trotzdem ist die App **heute nicht einreichbar und nicht startbar**. Der Grund i
 | B7 | **Backend prüft keinen einzigen Apple-Beleg.** Die Verifikation ist eine auskommentierte Zeile — jeder eingeloggte Nutzer kann sich per POST selbst Club-Tier schenken und es wird eine gefälschte `succeeded`-Zahlungszeile geschrieben. | `routes/membership.ts:221` | L |
 | B8 | **„Restore Purchases" ist ein Platzhalter-String** — bei Auto-Renewable Subscriptions von Apple zwingend verlangt. | `app/settings.tsx` | M |
 | B9 | **Der komplette Membership-Client-Vertrag passt nicht zum Server** — Verb, Pfadform und Body-Felder weichen bei jedem Call ab. | `src/store/membershipStore.ts` ↔ `routes/membership.ts` | M |
-| B10 | **Stripe-Checkout baut eine erfundene URL** — eine PaymentIntent-ID wird mit `src_` präfigiert und an den Legacy-Source-3DS-Endpoint geschickt. Kein Karteneingabefeld, kein SCA/3DS. Der Deep-Link-Handler setzt unbekannte Rückkehr-Zustände auf `success` → bestätigte Anmeldungen ohne Zahlung. | `src/store/checkoutStore.ts:124, 140-148` | L |
 
-> **Strategische Option:** Plus/Club aus v1 herausnehmen. Das eliminiert B6–B9 vollständig und verkürzt den Weg zur ersten Einreichung um Wochen. Turniergebühren und Platzbuchungen laufen weiter über Stripe (legitim IAP-befreit) — B10 bleibt und muss so oder so gefixt werden.
+> **Strategische Option:** Plus/Club aus v1 herausnehmen. Das eliminiert B6–B9 vollständig und verkürzt den Weg zur ersten Einreichung um Wochen. Turniergebühren und Platzbuchungen laufen weiter über Stripe (legitim IAP-befreit) und funktionieren seit dem Checkout-Session-Fix (B10) tatsächlich.
 
 ### 2.3 Offen — Apple-Review
 

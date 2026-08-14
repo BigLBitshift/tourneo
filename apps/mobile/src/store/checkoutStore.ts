@@ -18,7 +18,8 @@ export type CheckoutStatus = 'idle' | 'loading' | 'redirecting' | 'success' | 'e
 interface CheckoutSession {
   registrationId: number;
   paymentIntentId: string;
-  clientSecret: string;
+  /** Hosted Stripe Checkout URL — created server-side, never built here. */
+  checkoutUrl: string;
   amount: number;
   currency: string;
   free?: boolean;
@@ -36,7 +37,8 @@ interface CheckoutStoreState {
    */
   createCheckoutSession: (eventId: number, registrationId?: number) => Promise<void>;
   openCheckout: () => Promise<void>;
-  handleDeepLinkReturn: (url: string) => void;
+  /** Confirms the real state against our own API. Never infers from a URL. */
+  confirmStatus: () => Promise<void>;
   reset: () => void;
 }
 
@@ -75,7 +77,7 @@ export const useCheckoutStore = create<CheckoutStoreState>((set, get) => ({
           session: {
             registrationId: regId!,
             paymentIntentId: '',
-            clientSecret: '',
+            checkoutUrl: '',
             amount: 0,
             currency: 'eur',
             free: true,
@@ -89,7 +91,7 @@ export const useCheckoutStore = create<CheckoutStoreState>((set, get) => ({
         session: {
           registrationId: regId!,
           paymentIntentId: data.payment_intent_id,
-          clientSecret: data.client_secret,
+          checkoutUrl: data.checkout_url,
           amount: data.amount_cents,
           currency: (data.currency || 'EUR').toLowerCase(),
         },
@@ -103,7 +105,7 @@ export const useCheckoutStore = create<CheckoutStoreState>((set, get) => ({
 
   openCheckout: async () => {
     const { session } = get();
-    if (!session?.clientSecret) {
+    if (!session) {
       set({ status: 'error', error: 'Keine Zahlungsdaten vorhanden.' });
       return;
     }
@@ -114,38 +116,77 @@ export const useCheckoutStore = create<CheckoutStoreState>((set, get) => ({
       return;
     }
 
+    if (!session.checkoutUrl) {
+      set({ status: 'error', error: 'Zahlungsseite nicht verfügbar. Bitte erneut versuchen.' });
+      return;
+    }
+
     set({ status: 'redirecting' });
     try {
-      // We open Stripe's hosted PaymentIntent confirmation page via WebBrowser.
-      // The mobile app receives the result via the tourneo:// scheme. The actual
-      // payment confirmation happens server-side via the Stripe webhook
-      // (payment_intent.succeeded) so we only need to react to user dismissal here.
-      const url =
-        `https://hooks.stripe.com/redirect/authenticate/src_${session.paymentIntentId}` +
-        `?client_secret=${encodeURIComponent(session.clientSecret)}` +
-        `&return_url=${encodeURIComponent('tourneo://checkout/callback')}`;
+      // The URL comes from the server's Checkout Session. The client used
+      // to build one itself by prefixing the PaymentIntent id with `src_`
+      // and pointing at the legacy Sources 3DS endpoint, which meant there
+      // was never any card entry and never any SCA.
+      await WebBrowser.openAuthSessionAsync(session.checkoutUrl, 'tourneo://checkout/callback');
 
-      const result = await WebBrowser.openAuthSessionAsync(url, 'tourneo://checkout/callback');
-
-      if (result.type === 'success' && result.url) {
-        get().handleDeepLinkReturn(result.url);
-      } else if (result.type === 'cancel' || result.type === 'dismiss') {
-        set({ status: 'cancelled' });
-      }
+      // Whatever the browser reports — success, cancel, dismissal — the
+      // only thing that decides whether this registration is paid is our
+      // own record, written by the Stripe webhook.
+      await get().confirmStatus();
     } catch {
       set({ status: 'error', error: 'Browser konnte nicht geöffnet werden.' });
     }
   },
 
-  handleDeepLinkReturn: (url: string) => {
-    if (url.includes('success') || url.includes('status=paid') || url.includes('succeeded')) {
-      set({ status: 'success' });
-    } else if (url.includes('cancel')) {
-      set({ status: 'cancelled' });
-    } else {
-      // Default: assume payment processing - the webhook will confirm
-      set({ status: 'success' });
+  /**
+   * Asks the server what actually happened.
+   *
+   * The previous implementation inspected the return URL and defaulted
+   * *unknown* results to success, which confirmed registrations that were
+   * never paid for. Payment state is decided by the webhook and read back
+   * from the registration; the client never guesses.
+   *
+   * The webhook may land a moment after the browser closes, so a pending
+   * registration is polled briefly before being reported as such.
+   */
+  confirmStatus: async () => {
+    const { session } = get();
+    if (!session) return;
+
+    const POLL_ATTEMPTS = 5;
+    const POLL_INTERVAL_MS = 1200;
+
+    for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt++) {
+      try {
+        const res = await apiClient.get(`/registrations/${session.registrationId}`);
+        const status = res.data?.data?.status;
+
+        if (status === 'confirmed' || status === 'waitlisted') {
+          set({ status: 'success' });
+          return;
+        }
+        if (status === 'cancelled' || status === 'refunded') {
+          set({ status: 'cancelled' });
+          return;
+        }
+      } catch {
+        // Network hiccup — keep trying, then fall through to pending.
+      }
+
+      if (attempt < POLL_ATTEMPTS - 1) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      }
     }
+
+    // Still pending. Say so honestly rather than claiming success: if the
+    // payment does land, the webhook confirms it and the registration
+    // appears; if it does not, the user has not been misled into showing
+    // up at a tournament they are not signed up for.
+    set({
+      status: 'cancelled',
+      error:
+        'Die Zahlung wurde noch nicht bestätigt. Prüfe in Kürze deine Anmeldungen — bei Fragen melde dich beim Support.',
+    });
   },
 
   reset: () => set({ status: 'idle', session: null, error: null }),

@@ -88,7 +88,7 @@ export class StripeConnectService {
     venueStripeAccountId: string | null;
     platformFeePercent: number;
     userId: number;
-  }): Promise<{ payment_intent_id: string; client_secret: string } | null> {
+  }): Promise<{ payment_intent_id: string; checkout_url: string } | null> {
     if (!stripe) return null;
     if (!params.venueStripeAccountId) return null;
     if (params.amountCents <= 0) return null;
@@ -96,24 +96,55 @@ export class StripeConnectService {
     const feePercent = Math.min(Math.max(params.platformFeePercent, 0), 50);
     const applicationFee = Math.round((params.amountCents * feePercent) / 100);
 
-    const intent = await stripe.paymentIntents.create({
-      amount: params.amountCents,
-      currency: 'eur',
-      application_fee_amount: applicationFee,
-      transfer_data: { destination: params.venueStripeAccountId },
-      metadata: {
-        booking_id: String(params.bookingId),
-        booking_uuid: params.bookingUuid,
-        user_id: String(params.userId),
-        kind: 'court_booking',
+    const metadata = {
+      booking_id: String(params.bookingId),
+      booking_uuid: params.bookingUuid,
+      user_id: String(params.userId),
+      kind: 'court_booking',
+    };
+
+    // A hosted Checkout Session rather than a bare PaymentIntent. A
+    // PaymentIntent has no page a browser can open, so the mobile client
+    // used to fabricate one by prefixing the intent id with `src_` and
+    // pointing at the legacy Sources 3DS endpoint — no card entry, no SCA.
+    // The destination charge is unchanged: the club still receives the
+    // money and Tourneo keeps platform_fee_percent.
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: 'eur',
+            unit_amount: params.amountCents,
+            product_data: { name: 'Platzbuchung', description: 'Tourneo Platzbuchung' },
+          },
+        },
+      ],
+      metadata,
+      payment_intent_data: {
+        application_fee_amount: applicationFee,
+        transfer_data: { destination: params.venueStripeAccountId },
+        metadata,
+        description: 'Tourneo Platzbuchung',
+        statement_descriptor_suffix: 'TOURNEO',
       },
-      description: 'Tourneo Platzbuchung',
-      statement_descriptor_suffix: 'TOURNEO',
+      success_url: `${env.app.url}/booking/return?status=success&booking=${params.bookingUuid}`,
+      cancel_url: `${env.app.url}/booking/return?status=cancelled&booking=${params.bookingUuid}`,
+      // Matched to the 15-minute unpaid-booking TTL: a session that can
+      // outlive the hold would send someone to pay for a slot already
+      // released to the next person in the queue.
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
     });
 
-    if (!intent.client_secret) {
-      throw AppError.internal('Stripe did not return a client secret');
+    const paymentIntentId =
+      typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id;
+
+    if (!paymentIntentId || !session.url) {
+      throw AppError.internal('Stripe did not return a usable checkout session');
     }
-    return { payment_intent_id: intent.id, client_secret: intent.client_secret };
+    return { payment_intent_id: paymentIntentId, checkout_url: session.url };
   }
 }

@@ -263,17 +263,22 @@ export default function CourtAvailabilityScreen() {
       );
       setConfirmSlot(null);
 
-      if (result.status === 'pending_payment' && result.client_secret) {
-        // Stripe-connected venue: confirm the PaymentIntent in the hosted
-        // sheet. The webhook flips the booking to confirmed; unpaid
-        // bookings auto-expire after 15 minutes and free the slot.
+      if (result.status === 'pending_payment' && result.checkout_url) {
+        // The URL comes from the server's Stripe Checkout Session. The
+        // client used to build one by prefixing the PaymentIntent id with
+        // `src_` and pointing at the legacy Sources 3DS endpoint, so there
+        // was never any card entry and never any SCA.
         showToast('info', 'Fast geschafft', 'Bitte Zahlung abschließen (15 Min Zeit).');
-        const paymentIntentId = result.client_secret.split('_secret')[0];
-        const url =
-          `https://hooks.stripe.com/redirect/authenticate/src_${paymentIntentId}` +
-          `?client_secret=${encodeURIComponent(result.client_secret)}` +
-          `&return_url=${encodeURIComponent('tourneo://booking/callback')}`;
-        await WebBrowser.openAuthSessionAsync(url, 'tourneo://booking/callback');
+        await WebBrowser.openAuthSessionAsync(result.checkout_url, 'tourneo://booking/callback');
+        // The webhook decides whether this booking is paid; refetch rather
+        // than assume the browser's exit reason means anything.
+        await load();
+      } else if (result.status === 'pending_payment') {
+        showToast(
+          'error',
+          'Zahlung nicht möglich',
+          'Die Zahlungsseite konnte nicht erstellt werden. Bitte erneut versuchen.'
+        );
       } else {
         showToast('success', 'Platz gebucht', 'Siehe „Meine Buchungen"');
       }

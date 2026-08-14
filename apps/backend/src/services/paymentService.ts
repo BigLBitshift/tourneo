@@ -41,19 +41,67 @@ export class PaymentService {
       return { free: true, registration_id: registrationId };
     }
 
-    // Create Stripe PaymentIntent
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: netAmount,
-      currency: event.currency.toLowerCase(),
-      metadata: {
-        registration_id: registrationId.toString(),
-        event_id: event.id.toString(),
-        user_id: userId.toString(),
-        event_title: event.title,
+    const metadata = {
+      registration_id: registrationId.toString(),
+      event_id: event.id.toString(),
+      user_id: userId.toString(),
+      event_title: event.title,
+    };
+
+    // A hosted Checkout Session, not a bare PaymentIntent.
+    //
+    // A PaymentIntent on its own has no page a browser can open — it needs
+    // either a native PaymentSheet or a hosted page. The mobile client
+    // used to fabricate a URL by prefixing the intent id with `src_` and
+    // pointing it at the legacy Sources 3DS endpoint, so there was never
+    // any card entry and never any SCA. Checkout gives us a real URL,
+    // Strong Customer Authentication, Apple Pay where available and
+    // regional payment methods, without a native dependency.
+    //
+    // The PaymentIntent is still the object everything else keys off —
+    // `payment_intent.succeeded` remains the webhook that confirms the
+    // registration — so nothing downstream changes.
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: event.currency.toLowerCase(),
+            unit_amount: netAmount,
+            product_data: {
+              name: event.title,
+              description: 'Turnier-Teilnahmegebühr',
+            },
+          },
+        },
+      ],
+      metadata,
+      payment_intent_data: {
+        metadata,
+        description: `Tourneo: ${event.title}`,
+        statement_descriptor_suffix: 'TOURNEO',
       },
-      description: `Tourneo: ${event.title}`,
-      statement_descriptor_suffix: 'TOURNEO',
+      // Both land back in the app through the registered scheme; the
+      // client then confirms the real state against our own API rather
+      // than trusting which URL it was sent to.
+      success_url: `${env.app.url}/checkout/return?status=success&registration_id=${registrationId}`,
+      cancel_url: `${env.app.url}/checkout/return?status=cancelled&registration_id=${registrationId}`,
+      // Long enough to fetch a card, short enough that an abandoned
+      // session frees the pending registration in reasonable time.
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
     });
+
+    const paymentIntentId =
+      typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id;
+
+    if (!paymentIntentId) {
+      throw AppError.internal('Stripe did not return a payment intent for this session');
+    }
+
+    const paymentIntent = { id: paymentIntentId, client_secret: null as string | null };
 
     // Create payment record
     const paymentUuid = uuidv4();
@@ -83,7 +131,10 @@ export class PaymentService {
     }
 
     return {
-      client_secret: paymentIntent.client_secret,
+      // The URL the client opens. This is the field that makes payment
+      // actually possible; the client no longer builds one itself.
+      checkout_url: session.url,
+      session_id: session.id,
       payment_intent_id: paymentIntent.id,
       amount_cents: netAmount,
       currency: event.currency,
